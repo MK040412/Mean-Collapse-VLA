@@ -422,6 +422,44 @@ const {
 		margin-top: 16px;
 	}
 
+	.results-table {
+		margin: 28px auto;
+		max-width: 900px;
+	}
+
+	.results-table table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 16px;
+	}
+
+	.results-table thead th {
+		text-align: left;
+		padding: 10px 14px;
+		background: #f6f8fa;
+		border-bottom: 2px solid var(--border);
+		font-weight: 600;
+	}
+
+	.results-table tbody td {
+		padding: 10px 14px;
+		border-bottom: 1px solid var(--border);
+		vertical-align: top;
+	}
+
+	.results-table tbody tr:last-child td {
+		border-bottom: none;
+	}
+
+	.results-table tbody td:last-child {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.results-table .caption-muted {
+		margin-top: 10px;
+	}
+
 	@media (max-width: 991px) {
 		body {
 			font-size: 16px;

@@ -219,15 +219,16 @@ const body = String.raw`
 </div>
 
 <hr />
-<h1>5. Both Views Mean-Collapse — and the Top-View Collapse is Worse</h1>
+<h1>5. Both Views Mean-Collapse — and the Bare Top-View Collapses to 0%</h1>
 
 <p>
 	Naively the <b>top-view (MDP)</b> agent should be a clean upper bound — it sees
-	the underlying state, and the task is reduced to coordinate VQA over waypoints.
-	In practice, the top-view trained Qwen3-VL VLA exhibits the <b>most severe mean
-	collapse</b>: the predicted waypoint sequence collapses toward a near-zero
-	displacement and the resulting gait is degenerate — walks in place, sideways
-	drift, falling over, frozen agents.
+	the underlying state, after all. In practice, the <b>direct action</b>
+	top-view VLA exhibits the <b>most severe mean collapse</b>: the predicted
+	action sequence collapses toward near-zero displacement and the resulting
+	rollout is degenerate — the ant walks in place, drifts sideways, tips over,
+	or simply gets marked as failed and halts. <b>Success rate: 0%</b>
+	(see Section 5.3).
 </p>
 
 <p>
@@ -238,21 +239,34 @@ const body = String.raw`
 	ones.
 </p>
 
-<h2>5.1 Top-view (MDP) — degenerate / falling collapse</h2>
+<p>
+	The trick that rescues top-view is the <b>coordinate-VQA reformulation</b>
+	described in Section 4.2 — predict waypoint coordinates as text instead of
+	low-level actions — which lifts the top-view success rate to the value
+	reported in the original presentation.
+</p>
+
+<h2>5.1 Top-view (MDP) — different loop-case examples</h2>
+
+<p>
+	Each of the videos below is a <b>different example of the same loop / mean
+	collapse pathology</b> on the top-view input.
+</p>
 
 <div class="grid-2">
 	<div class="figure">
 		<video controls muted loop playsinline preload="metadata" src="${vid('fail_falling.mp4')}"></video>
 		<span class="caption-muted">
-			Falling-over collapse. The waypoint sequence collapses toward a degenerate
-			motion; the controller flips the ant repeatedly.
+			Loop-case example 1 — the ant tips over almost immediately at the start.
+			The simulation marks the episode as failed and the rollout simply halts in
+			place for the rest of the run. (Full video shown.)
 		</span>
 	</div>
 	<div class="figure">
 		<video controls muted loop playsinline preload="metadata" src="${vid('fail_loop.mp4')}"></video>
 		<span class="caption-muted">
-			Looping / stalled collapse. The agent twitches in place and cycles between
-			the same two actions.
+			Loop-case example 2 — the agent twitches in place and cycles between the
+			same two actions in a corridor.
 		</span>
 	</div>
 </div>
@@ -262,12 +276,69 @@ const body = String.raw`
 <div class="figure">
 	<video controls muted loop playsinline preload="metadata" src="${vid('mean_collapse_after_40.mp4')}"></video>
 	<span class="caption-muted">
-		After ~step 40 the predicted waypoints collapse to a near-zero mean and the
-		ant is frozen in place for the rest of the rollout.
+		Loop-case example 3 — after ~step 40 the predicted waypoints collapse to a
+		near-zero mean and the ant is frozen in place for the rest of the rollout.
 	</span>
 </div>
 
-<h2>5.3 3rd-person (POMDP) — opportunistic successes</h2>
+<h2>5.3 Results — Top-view collapses to 0% without the VQA reformulation</h2>
+
+<p>
+	If we run the <b>top-view</b> input through the <b>direct action VLA head</b>
+	(no coordinate-VQA reformulation), success is <b>0%</b> — mean collapse is
+	total. Reformulating the top-view task as <b>coordinate VQA</b> over waypoints
+	recovers the success rate reported in the original presentation. On the
+	3rd-person input, the direct action VLA gets the partial-observability number
+	from the presentation, and adding the steering module of Section 7 raises it
+	above the top-view baseline.
+</p>
+
+<div class="results-table">
+	<table>
+		<thead>
+			<tr>
+				<th>Setting</th>
+				<th>Camera</th>
+				<th>Output head</th>
+				<th>Success rate</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td>Top-view, no VQA</td>
+				<td>Top-view (MDP)</td>
+				<td>Direct action chunk</td>
+				<td><b>0.00</b></td>
+			</tr>
+			<tr>
+				<td>Top-view, with VQA</td>
+				<td>Top-view (MDP)</td>
+				<td>Coordinate-VQA waypoints</td>
+				<td><b>0.53</b></td>
+			</tr>
+			<tr>
+				<td>3rd-person, baseline</td>
+				<td>3rd-person (POMDP)</td>
+				<td>Direct action chunk</td>
+				<td><b>0.16</b></td>
+			</tr>
+			<tr>
+				<td>3rd-person, with steering</td>
+				<td>3rd-person (POMDP)</td>
+				<td>Direct action + steering module</td>
+				<td><b>0.84</b></td>
+			</tr>
+		</tbody>
+	</table>
+	<span class="caption-muted">
+		Success rates reproduced from the Weasel toy experiment. Numbers for the
+		top-view-with-VQA, 3rd-person baseline, and 3rd-person-with-steering rows
+		match the presentation; the top-view-without-VQA row (0.00) is the
+		mean-collapse failure mode this post studies.
+	</span>
+</div>
+
+<h2>5.4 3rd-person (POMDP) — opportunistic successes</h2>
 
 <p>
 	On the 3rd-person input the same Markovian recipe still mean-collapses, but
