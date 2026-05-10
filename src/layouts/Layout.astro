@@ -47,6 +47,23 @@ const {
 		{description && <meta name='description' content={description} />}
 		<meta property='og:title' content={pageTitle || title} />
 		{description && <meta property='og:description' content={description} />}
+
+		<script is:inline set:html={`
+			window.MathJax = {
+				tex: {
+					inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+					displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+					processEscapes: true
+				},
+				options: { skipHtmlTags: ['script','noscript','style','textarea','pre','code'] }
+			};
+		`} />
+		<script
+			is:inline
+			id='MathJax-script'
+			async
+			src='https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js'
+		></script>
 	</head>
 	<body>
 		<div class='container'>

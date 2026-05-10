@@ -14,382 +14,398 @@ const authors = [
 
 const links = [
 	{ label: 'Project Weasel', href: 'https://mk040412.github.io/Project-Weasel/' },
-	{ label: 'Code', href: 'https://github.com/MK040412/Mean-Collapse-VLA' },
+	{ label: 'Code', href: 'https://github.com/MK040412/Weasel_toy_experiment' },
 	{ label: 'Slides', href: 'https://github.com/MK040412/Mean-Collapse-VLA/blob/main/README.md' },
 ]
+
+const body = String.raw`
+<div class="tldr-box">
+	<h2>TL;DR</h2>
+	<p>
+		On <span class="text-tt">OGBench Ant-Maze</span> we test a
+		<b>VLM-based VLA</b> (frozen <a href="https://arxiv.org/abs/2511.21631">Qwen3-VL 2B</a>
+		backbone + Pi0-style action expert) trained to act on the latest observation
+		only. The <b>top-view</b> agent is essentially solving an MDP via a
+		<b>coordinate-VQA</b>-style instruction (<span class="text-tt">Go to (x, y)</span>) and
+		succeeds; hiding the top-view drops the same recipe to <b>mean collapse</b> on
+		the 3rd-person POMDP — degenerate gait, looping, frozen agents.
+	</p>
+	<p>
+		A small <b>memory-based steering module</b> (GLA Linear-SSM + Perceiver,
+		injected into the <b>frozen</b> VLA) <b>solves mean collapse</b>: success
+		probability on the 3rd-person input recovers and surpasses the MDP top-view
+		baseline.
+	</p>
+	<p>
+		The same Markovian-on-$o_t$ pathology shows up on a real GUI agent
+		(<a href="https://github.com/stepfun-ai/gelab-zero">GELab-Zero-4B-preview</a>)
+		running a Duolingo &ldquo;tap the matching pairs&rdquo; quiz.
+	</p>
+</div>
+
+<hr />
+<h1>1. MDP vs. POMDP</h1>
+
+<div class="figure">
+	<img src="${fig('mdp_vs_pomdp.png')}" alt="MDP vs POMDP graphical models" />
+	<span class="caption">
+		MDP: the agent acts on the state $s$ directly. POMDP: the agent only sees
+		observations $o$ and must maintain a belief $b$ over the latent state.
+	</span>
+</div>
+
+<ul>
+	<li><b>MDP.</b> $\pi(a_t \mid s_t)$ — the agent sees the task-relevant state directly.</li>
+	<li><b>POMDP.</b> $\pi(a_t \mid h_t)$ where $h_t = (o_0, a_0, \ldots, o_t)$ — only noisy/partial observations are available, so the policy must condition on history.</li>
+</ul>
+
+<div class="block-statement">
+	A Markovian policy on $o_t$ is suboptimal when $o_t \not\Rightarrow s_t$.
+</div>
+
+<hr />
+<h1>2. Most VLA Benchmarks Hide the POMDP</h1>
+
+<p>
+	Most VLA benchmarks are effectively MDPs: the current scene already encodes the
+	task-relevant state, so a policy reading only the latest observation looks fine
+	(<span class="text-tt">LIBERO</span>, <span class="text-tt">SIMPLER</span>).
+	GUI agents (<span class="text-tt">UI-TARS</span>-style) decide each action from a
+	<b>summary plus the current screenshot only</b>. Both setups assume
+	$\pi(a_t \mid o_t)$ suffices.
+</p>
+<p>
+	But real long-horizon tasks (Minecraft, GUI agents, manipulation under
+	occlusion) need <b>history</b> $h_t$, not just $o_t$. Crafting a pickaxe needs
+	the fact &ldquo;I already chopped a tree&rdquo; — and that fact is not in the
+	current screen.
+</p>
+
+<hr />
+<h1>3. A Controllable POMDP in OGBench Ant-Maze</h1>
+
+<p>
+	We use the public <a href="https://github.com/seohongpark/ogbench">OGBench</a>
+	Ant-Maze tasks and re-render them in MuJoCo with two cameras:
+</p>
+
+<ul>
+	<li><b>Top-view (MDP).</b> $o_t = s_t$: full position, goal, and maze layout.</li>
+	<li><b>3rd-person view (POMDP).</b> $o_t \sim \Omega(\cdot \mid s_t)$: only what is in front of the ant. Visually similar 3rd-person frames can correspond to <b>different</b> next steps — the source of mean collapse.</li>
+</ul>
+
+<div class="figure">
+	<img src="${fig('two_views.png')}" alt="Same world, two views — the source of mean collapse" />
+	<span class="caption">
+		Same world, two views. <b>Left:</b> top-view (MDP). <b>Right:</b> 3rd-person
+		(POMDP). Visually similar 3rd-person frames can correspond to different
+		underlying states.
+	</span>
+</div>
+
+<hr />
+<h1>4. Setup</h1>
+
+<p>
+	Concrete numbers, taken from the
+	<a href="https://github.com/MK040412/Weasel_toy_experiment">Weasel Toy Experiment</a>
+	repository.
+</p>
+
+<h2>4.1 Data — AntMaze paired dataset</h2>
+<ul>
+	<li>Source: OGBench <code>antmaze-{medium,large,giant}-navigate-v0</code>, re-rendered through MuJoCo (<span class="text-tt">osmesa</span>).</li>
+	<li>$3$ mazes $\times$ $1{,}000$ episodes $\times \sim 1{,}001$ steps, $224 \times 224 \times 3$ uint8, two cameras (<span class="text-tt">obs_topdown</span>, <span class="text-tt">obs_third</span>).</li>
+	<li>Action: $8$-DOF joint torque (OGBench native); <span class="text-tt">qpos</span>: $15$-D, <span class="text-tt">qvel</span>: $14$-D.</li>
+	<li>Hindsight relabeling: chunk $K = 16$, terminal-goal fraction $0.25$.</li>
+	<li>Language: <span class="text-tt">"Go to (x.xx, y.yy)."</span> formed from the hindsight goal $(x, y)$.</li>
+</ul>
+
+<h2>4.2 Model — VLM-based VLA</h2>
+<div class="figure">
+	<img src="${fig('ant_vla_training.png')}" alt="Ant VLA training pipeline" />
+	<span class="caption">
+		$(o_t, \text{instr}, \text{proprio}) \rightarrow$ Qwen3-VL 2B (frozen)
+		$\rightarrow$ Action Expert $\rightarrow$ chunk of $7$-D actions.
+	</span>
+</div>
+
+<ul>
+	<li><b>VLM backbone.</b> <span class="text-tt">Qwen/Qwen3-VL-2B-Instruct</span>, hidden dim $2048$, <b>frozen</b> (<span class="text-tt">VLMConfig.freeze=True</span>).</li>
+	<li><b>Action Expert.</b> Pi0/FLOWER-style transformer, $12$ layers, $d_{\text{model}} = 1536$, $d_{\text{ff}} = 4096$, $12$ heads / $4$ KV heads (GQA), $\text{head\_dim} = 128$.</li>
+	<li><b>Action prediction.</b> <b>Flow matching</b> (Pi0.5 convention), $\beta(1.5, 1.0)$ time schedule, $10$ denoise steps at inference.</li>
+	<li><b>Optimization.</b> $\text{lr} = 5 \times 10^{-5}$, weight decay $0.01$, max grad norm $1.0$, mixed precision.</li>
+</ul>
+
+<div class="block-statement">
+	The whole pipeline is <b>VLM-based VLA, frozen-VLM</b> — the only learnable
+	part on the base policy is the action expert.
+</div>
+
+<hr />
+<h1>5. Top-View Works (≈ Coordinate VQA); 3rd-Person Mean-Collapses</h1>
+
+<p>
+	On the <b>top-view</b> input the trained VLA is essentially answering a
+	<b>coordinate VQA</b>: given the bird's-eye image plus
+	<span class="text-tt">Go to (x, y)</span>, it just needs to map pixels to a position
+	offset and step toward it. In our runs the top-view agent reproduces the result
+	reported in the presentation — it solves the medium maze reliably.
+</p>
+
+<p>
+	On the <b>3rd-person</b> input the same recipe falls apart. Visually aliased
+	corridors collapse the policy to a mean action: the ant walks in place,
+	twitches sideways, falls over, or loops between the same two actions in a
+	corner. This is the <b>mean-collapse signature</b>.
+</p>
+
+<h2>5.1 Successful 3rd-person rollouts (occasional)</h2>
+
+<p>
+	3rd-person sometimes wins by sheer exploration — the policy wanders, the pink
+	goal happens to come into view, and it dives in. These successes are
+	<b>opportunistic</b>, not principled.
+</p>
+
+<div class="grid-2">
+	<div class="figure">
+		<video controls muted loop playsinline preload="metadata" src="${vid('success_00.mp4')}"></video>
+		<span class="caption-muted">3rd-person, no memory — opportunistic success.</span>
+	</div>
+	<div class="figure">
+		<video controls muted loop playsinline preload="metadata" src="${vid('success_03.mp4')}"></video>
+		<span class="caption-muted">3rd-person, no memory — opportunistic success on a different seed.</span>
+	</div>
+</div>
+
+<h2>5.2 Mean-collapse failure modes</h2>
+
+<div class="grid-2">
+	<div class="figure">
+		<video controls muted loop playsinline preload="metadata" src="${vid('fail_falling.mp4')}"></video>
+		<span class="caption-muted">
+			Falling-over collapse — the &ldquo;mean&rdquo; action is a degenerate gait;
+			the ant tips and resets repeatedly.
+		</span>
+	</div>
+	<div class="figure">
+		<video controls muted loop playsinline preload="metadata" src="${vid('fail_loop.mp4')}"></video>
+		<span class="caption-muted">
+			Looping collapse — the agent re-enters the same aliased corner and cycles
+			between the same two actions.
+		</span>
+	</div>
+</div>
+
+<h2>5.3 Extreme stuck case — <span class="text-tt">Mean_Collapse_After_40</span></h2>
+
+<div class="figure">
+	<video controls muted loop playsinline preload="metadata" src="${vid('mean_collapse_after_40.mp4')}"></video>
+	<span class="caption-muted">
+		Extreme mean collapse. After ~step 40 the policy stops moving almost entirely
+		— the action distribution has collapsed to a near-zero mean and the ant is
+		frozen in place for the rest of the rollout.
+	</span>
+</div>
+
+<hr />
+<h1>6. Mean Collapse — Why a Markovian VLA Goes Degenerate</h1>
+
+<p>
+	Let two underlying states $s^{(1)} \neq s^{(2)}$ map to similar observations
+	$o^{(1)} \approx o^{(2)} \approx o$ (visual aliasing in the 3rd-person view).
+	The <b>optimal Markovian action</b> at $o$ is a posterior-weighted average:
+</p>
+
+<p>
+	$$
+	\pi^{\star}(a \mid o) = \mathbb{E}_{s \sim p(s \mid o)}\,[\pi^{\star}(a \mid s)]
+	\;=\; \sum_{i} p(s^{(i)} \mid o)\,\pi^{\star}(a \mid s^{(i)}).
+	$$
+</p>
+
+<p>
+	When the optimal $\pi^{\star}(a \mid s^{(i)})$ for different $s^{(i)}$ point in
+	<b>opposite directions</b>, this average collapses to a degenerate motion
+	(walks in place, falls over, oscillates). That is what we observe on the
+	3rd-person Ant-Maze rollouts.
+</p>
+
+<hr />
+<h1>7. The Fix — A Memory-Based Steering Module on the Frozen VLA</h1>
+
+<div class="figure">
+	<img src="${fig('steering_module.png')}" alt="Steering module added to the frozen VLA" />
+	<span class="caption">
+		Learnable steering (peach) builds a fixed-size memory $Z$ from past ViT
+		features via a <b>GLA temporal mixer (Linear SSM)</b> + <b>Perceiver
+		compression</b>, then injects it into the frozen ViT at L8 / L16 and into the
+		action head through gated residuals. The <b>frozen base VLA (green) is never
+		re-trained</b>.
+	</span>
+</div>
+
+<div class="block-statement">
+	The steering module is what <b>solves mean collapse</b> on the 3rd-person
+	POMDP — recovering the success probability lost by hiding the top-view, and
+	surpassing the MDP top-view baseline.
+</div>
+
+<h2>7.1 Formulation</h2>
+
+<p>
+	Past ViT features $h^{(\ell)}_{t-k}$ at depths $\ell \in \{8, 16\}$ for
+	$k = 1, \ldots, K$ are mixed into a fixed-size state by a <b>Gated Linear
+	Attention</b> (Linear SSM) with content-gated decay:
+</p>
+
+<p>
+	$$
+	\begin{aligned}
+	S_k &= \sigma(g_k) \odot S_{k-1} + K_k^{\top} V_k, \\
+	O_k &= Q_k\, S_k.
+	\end{aligned}
+	$$
+</p>
+
+<p>
+	The mixed sequence $O^{(\ell)}_{1:K}$ is then compressed to $m = 32$ memory
+	tokens by a <b>Perceiver</b> cross-attention with learnable queries
+	$Q_{\text{learn}} \in \mathbb{R}^{m \times d}$:
+</p>
+
+<p>
+	$$
+	Z^{(\ell)} \;=\; \mathrm{CrossAttn}\!\left(Q_{\text{learn}},\; O^{(\ell)}_{1:K}\right) \;\in\; \mathbb{R}^{m \times d}.
+	$$
+</p>
+
+<p>
+	The memory is <b>gated-residual injected</b> back into the frozen ViT at
+	depths $\ell \in \{8, 16\}$:
+</p>
+
+<p>
+	$$
+	\tilde{h}^{(\ell)}_t \;=\; h^{(\ell)}_t \;+\; \sigma(\alpha_\ell)\,
+	\mathrm{CrossAttn}\!\left(h^{(\ell)}_t,\; Z^{(\ell)}\right).
+	$$
+</p>
+
+<p>And a small residual is added to the frozen action head:</p>
+
+<p>
+	$$
+	a_t \;=\; \underbrace{\pi_{\text{base}}(o_t)}_{\text{frozen}}
+	\;+\; \sigma(\alpha_{\text{res}})\, \Delta\!\left(Z^{(16)}\right).
+	$$
+</p>
+
+<p>
+	Identity-init gates ($\sigma(\alpha) = 0$) make the module a <b>no-op at
+	initialization</b>, so it recovers the base VLA exactly and only learns
+	corrections.
+</p>
+
+<h2>7.2 Why a State-Space Model?</h2>
+
+<ul>
+	<li><b>Long sequence.</b> Flattened past is $T = K \cdot N_{\text{patch}} \sim 2{,}000$ tokens. Quadratic attention is $\mathcal{O}(T^2)$; a Linear SSM is $\mathcal{O}(T)$ with a fixed-size state $S$.</li>
+	<li><b>Content-gated decay.</b> $\sigma(g_t)$ is a per-token forget — more expressive than RetNet's fixed $\gamma$, more stable than plain linear attention.</li>
+	<li><b>Length extrapolation.</b> Train with $K \sim \mathcal{U}[1, 32]$ and sinusoidal temporal PE; remains stable at $K \in \{64, 128\}$ at inference.</li>
+	<li><b>Identity-init gates.</b> The module starts as a no-op, recovers the base VLA exactly, then learns corrections safely.</li>
+</ul>
+
+<hr />
+<h1>8. Bonus — Same Pathology on a GUI Agent</h1>
+
+<p>
+	The exact same Markovian-on-$o_t$ failure shows up in a real GUI agent.
+	<a href="https://github.com/stepfun-ai/gelab-zero">GELab-Zero-4B-preview</a>, a
+	VLM-based agent, runs on a Duolingo &ldquo;tap the matching pairs&rdquo; quiz.
+	At every step it receives the current screenshot and emits Thought + Action.
+</p>
+
+<div class="figure">
+	<img src="${fig('gui_agent_case.png')}" alt="Testing GELab-Zero on Duolingo matching quiz" />
+	<span class="caption">
+		<span class="text-tt">GELab-Zero-4B-preview</span> on a Duolingo matching
+		quiz. At every step the agent only sees the current screenshot.
+	</span>
+</div>
+
+<h2>8.1 The Loop-Case</h2>
+
+<p>
+	Solved pairs turn slightly darker, but solved and fresh tiles look almost
+	identical — and the agent has no memory of which ones it already tapped. So it
+	re-taps a solved pair, the app rejects it, and the screen returns to the same
+	state.
+</p>
+
+<div class="figure">
+	<img src="${fig('gui_loop_case.png')}" alt="GUI loop case — C → E → C → E …" />
+	<span class="caption">
+		Loop-case definition. The agent re-taps a solved pair, the app rejects it,
+		the screen returns to the same state — $C \rightarrow E \rightarrow C \rightarrow E \rightarrow \ldots$.
+		Same pathology as the Ant POMDP: $o_t$ (screenshot) $\not\Rightarrow s_t$
+		(solved-set).
+	</span>
+</div>
+
+<div class="figure">
+	<video controls muted loop playsinline preload="metadata" src="${vid('gui_rollout.mp4')}"></video>
+	<span class="caption-muted">GUI agent rollout (sped up) — getting stuck in the loop.</span>
+</div>
+
+<hr />
+<h1>9. Takeaway</h1>
+
+<ul>
+	<li>On a small Ant-Maze setup, a <b>VLM-based VLA</b> trained on the latest observation only <b>mean-collapses</b> on POMDP inputs — degenerate gait, falling over, frozen agents.</li>
+	<li>The top-view variant works mainly because the task degenerates to a <b>coordinate VQA</b>; the 3rd-person variant exposes the failure mode that any VLM-based VLA inherits if it acts on $o_t$ alone.</li>
+	<li>A <b>memory-based steering module on the frozen VLA</b> (GLA Linear-SSM + Perceiver, identity-init gated injection) is the lightweight fix that <b>raises the success rate</b> on the 3rd-person POMDP back above the top-view MDP baseline.</li>
+	<li>The Markovian-on-$o_t$ pathology is not specific to robotics — the same loop-case shows up on a GUI agent.</li>
+</ul>
+
+<hr />
+<h1>References</h1>
+<ul>
+	<li>Qwen3-VL — <a href="https://arxiv.org/abs/2511.21631">arxiv.org/abs/2511.21631</a></li>
+	<li>OpenVLA-OFT — <a href="https://openvla-oft.github.io/">openvla-oft.github.io</a></li>
+	<li>GELab-Zero — <a href="https://github.com/stepfun-ai/gelab-zero">github.com/stepfun-ai/gelab-zero</a></li>
+	<li>OGBench — <a href="https://seohong.me/projects/ogbench/">seohong.me/projects/ogbench</a></li>
+	<li>Weasel Toy Experiment (code) — <a href="https://github.com/MK040412/Weasel_toy_experiment">github.com/MK040412/Weasel_toy_experiment</a></li>
+</ul>
+
+<h1>Citation</h1>
+<pre class="codebox"><code>@misc{kang2026meancollapse,
+  title={Mean Collapse is a Serious Bottleneck of VLA},
+  author={Kang, Minkyu and Kim, JinHo and Shin, Eunseop and Hwang, Dayeon},
+  year={2026},
+  howpublished={\url{https://mk040412.github.io/Mean-Collapse-VLA/}},
+  note={Team Weasel}
+}</code></pre>
+
+<h1>Acknowledgement</h1>
+<p>
+	Sub-project of <a href="https://mk040412.github.io/Project-Weasel/">Project Weasel</a>,
+	maintained by <a href="https://mk040412.github.io/">Kang Minkyu</a>. Page style
+	adapted from Seohong Park's OGBench page.
+</p>
+`
 ---
 
 <Layout
 	title='Mean Collapse is a Serious Bottleneck of VLA'
 	pageTitle='Mean Collapse in VLA'
-	description='When a VLA acts on the latest observation only, visually aliased states collapse the policy to a mean action. A small memory-based steering module on a frozen Qwen3-VL VLA recovers the lost performance — past even the MDP top-view baseline.'
+	description='Even on a small Ant-Maze setup, a VLM-based VLA that acts on the latest observation only mean-collapses on POMDP inputs. A small memory-based steering module on the frozen VLA recovers the lost performance.'
 	authors={authors}
 	links={links}
 	hero={fig('ant_hero.png')}
 	heroAlt='Ant Maze rollout — 3rd-person view (left) and top-view (right)'
 	faviconHref={`${base}/weasel-logo.png`}
 >
-	<div class='tldr-box'>
-		<h2>TL;DR</h2>
-		<p>
-			A VLA trained to act on the <b>latest observation only</b> mean-collapses on
-			POMDP tasks: when two distinct underlying states share a similar observation,
-			the optimal Markovian action is the <b>mean over plausible futures</b> — and the
-			mean is often wrong (loops, falling, frozen agents).
-		</p>
-		<p>
-			On <span class='text-tt'>OGBench Ant-Maze</span>, the
-			<span class='text-tt'>Top-View</span> agent is essentially solving an MDP through
-			a <b>coordinate VQA</b>-style instruction and reproduces the presentation result;
-			hiding the top-view collapses success on the <span class='text-tt'>3rd-person</span>
-			view. A small <b>memory-based steering module</b> — GLA Linear-SSM + Perceiver,
-			injected into a <b>frozen</b> Qwen3-VL VLA — <b>recovers the lost performance</b>
-			on the 3rd-person input.
-		</p>
-		<p>
-			The same pathology shows up beyond robotics: a frozen
-			<a href='https://github.com/stepfun-ai/gelab-zero'>GELab-Zero-4B-preview</a>
-			GUI agent on a Duolingo &ldquo;tap the matching pairs&rdquo; quiz loops because
-			solved and fresh tiles look identical and the agent has no memory.
-		</p>
-	</div>
-
-	<hr />
-	<h1>1. Background — MDP vs. POMDP</h1>
-
-	<div class='figure'>
-		<img src={fig('mdp_vs_pomdp.png')} alt='MDP vs POMDP graphical models' />
-		<span class='caption'>
-			MDP agent acts on the state <i>s</i> directly; the POMDP agent maintains a
-			belief <i>b</i> from observations <i>o</i>.
-		</span>
-	</div>
-
-	<ul>
-		<li>
-			<b>MDP.</b> <i>π</i>(<i>a<sub>t</sub></i> | <i>s<sub>t</sub></i>) — the agent
-			sees the task-relevant state directly.
-		</li>
-		<li>
-			<b>POMDP.</b> <i>π</i>(<i>a<sub>t</sub></i> | <i>h<sub>t</sub></i>) where
-			<i>h<sub>t</sub></i> = (<i>o<sub>0</sub>, a<sub>0</sub>, …, o<sub>t</sub></i>) — only
-			noisy/partial observations are available, so the policy must condition on
-			history.
-		</li>
-	</ul>
-
-	<div class='block-statement'>
-		A Markovian policy on <i>o<sub>t</sub></i> is suboptimal when
-		<i>o<sub>t</sub></i> ↛ <i>s<sub>t</sub></i>.
-	</div>
-
-	<hr />
-	<h1>2. Most VLA Benchmarks Hide the POMDP</h1>
-
-	<p>
-		Most VLA benchmarks are effectively MDPs: the current scene already encodes the
-		task-relevant state, so a policy that reads only the latest observation looks
-		fine. <span class='text-tt'>LIBERO</span> and <span class='text-tt'>SIMPLER</span>-style
-		manipulation are like that — the relevant scene is on screen at every timestep.
-	</p>
-
-	<p>
-		GUI agents (<span class='text-tt'>UI-TARS</span>-style) are typically deployed the
-		same way: each action is decided from a <b>summary plus the current screenshot
-		only</b>. Both setups assume <i>π</i>(<i>a<sub>t</sub></i> | <i>o<sub>t</sub></i>)
-		suffices — i.e. Markovian on the latest observation.
-	</p>
-
-	<hr />
-	<h1>3. But Real Tasks Are POMDPs</h1>
-
-	<p>
-		Crafting a pickaxe in Minecraft requires the fact &ldquo;I already chopped a
-		tree&rdquo; — and that fact is not in the current screen. Inventory, past
-		actions, and previously visited rooms are <b>hidden state</b>. Real long-horizon
-		tasks (Minecraft, GUI agents, manipulation under occlusion) are POMDPs: the
-		policy needs <b>history</b> <i>h<sub>t</sub></i>, not just <i>o<sub>t</sub></i>.
-	</p>
-
-	<hr />
-	<h1>4. A Controllable POMDP in OGBench Ant-Maze</h1>
-
-	<p>
-		We build a controllable POMDP using <a href='https://github.com/seohongpark/ogbench'>OGBench</a>
-		Ant-Maze. The agent must reach a fixed pink goal from a fixed start; the only
-		thing we vary across settings is the <b>camera given to the policy</b>.
-	</p>
-
-	<div class='figure'>
-		<img src={fig('two_views.png')} alt='Same world, two views — the source of mean collapse' />
-		<span class='caption'>
-			<b>Top-view (MDP).</b> <i>o<sub>t</sub></i> = <i>s<sub>t</sub></i>: full
-			position, goal, and maze layout — the agent essentially sees the underlying
-			state directly. &nbsp; <b>3rd-person view (POMDP).</b>
-			<i>o<sub>t</sub></i> ∼ Ω(· | <i>s<sub>t</sub></i>): only what is in front of
-			the ant. Visually similar 3rd-person frames can correspond to <b>different</b>
-			next steps — the source of mean collapse.
-		</span>
-	</div>
-
-	<hr />
-	<h1>5. Method — Ant VLA, OpenVLA-OFT Style</h1>
-
-	<p>
-		The base policy is a Vision-Language-Action model in the
-		<a href='https://openvla-oft.github.io/'>OpenVLA-OFT</a> style with a
-		<a href='https://arxiv.org/abs/2511.21631'>Qwen3-VL 2B</a> backbone. Both the ViT
-		and the LLM decode head are fine-tuned with <b>LoRA</b> on Ant-Maze
-		demonstrations. Input is an image observation (top-view <i>or</i> 3rd-person), Ant
-		proprioception, and a <span class='text-tt'>Go to the point ⟨x, y⟩</span> instruction.
-		Output is a <b>parallel-decoded action chunk</b> in OpenVLA-OFT style. We train one
-		VLA per camera so that the only difference across settings is observability.
-	</p>
-
-	<div class='figure'>
-		<img src={fig('ant_vla_training.png')} alt='Ant VLA training pipeline' />
-		<span class='caption'>
-			Image + proprio + instruction → Qwen3-VL 2B (LoRA on ViT and LLM head) →
-			parallel-decoded action chunk (OpenVLA-OFT style).
-		</span>
-	</div>
-
-	<hr />
-	<h1>6. Top-View Works (≈ Coordinate VQA); 3rd-Person Mean-Collapses</h1>
-
-	<p>
-		On the <b>top-view</b> input, the trained Qwen3-VL VLA is essentially answering a
-		<b>coordinate VQA</b>: given the bird's-eye image plus
-		<span class='text-tt'>Go to the point ⟨x, y⟩</span>, it just needs to map pixels to a
-		position offset and step toward it. In our runs, the top-view agent reproduces
-		the result reported in the presentation — it solves the medium maze reliably.
-	</p>
-
-	<p>
-		On the <b>3rd-person</b> input the same recipe falls apart. Visually aliased
-		corridors collapse the policy to a mean action: the ant walks in place,
-		twitches sideways, falls over, or loops between the same two actions in a
-		corner. This is the <b>mean-collapse signature</b>.
-	</p>
-
-	<h2>6.1 Successful 3rd-person rollouts (occasional)</h2>
-
-	<p>
-		3rd-person sometimes wins by sheer exploration — the policy wanders, the pink
-		goal happens to come into view, and it dives in. These successes are
-		<b>opportunistic</b>, not principled.
-	</p>
-
-	<div class='grid-2'>
-		<div class='figure'>
-			<video controls muted loop playsinline preload='metadata' src={vid('success_00.mp4')}></video>
-			<span class='caption-muted'>3rd-person, no memory — opportunistic success.</span>
-		</div>
-		<div class='figure'>
-			<video controls muted loop playsinline preload='metadata' src={vid('success_03.mp4')}></video>
-			<span class='caption-muted'>3rd-person, no memory — opportunistic success on a different seed.</span>
-		</div>
-	</div>
-
-	<h2>6.2 Mean-collapse failure modes</h2>
-
-	<div class='grid-2'>
-		<div class='figure'>
-			<video controls muted loop playsinline preload='metadata' src={vid('fail_falling.mp4')}></video>
-			<span class='caption-muted'>
-				Falling-over collapse — the &ldquo;mean&rdquo; action is a degenerate gait;
-				the ant tips and resets repeatedly.
-			</span>
-		</div>
-		<div class='figure'>
-			<video controls muted loop playsinline preload='metadata' src={vid('fail_loop.mp4')}></video>
-			<span class='caption-muted'>
-				Looping collapse — the agent re-enters the same aliased corner and cycles
-				between the same two actions.
-			</span>
-		</div>
-	</div>
-
-	<h2>6.3 Extreme stuck case — <span class='text-tt'>Mean_Collapse_After_40</span></h2>
-
-	<div class='figure'>
-		<video controls muted loop playsinline preload='metadata' src={vid('mean_collapse_after_40.mp4')}></video>
-		<span class='caption-muted'>
-			Extreme mean collapse. After ~step 40 the policy stops moving almost entirely
-			— the action distribution has collapsed to a near-zero mean and the ant is
-			frozen in place for the rest of the rollout.
-		</span>
-	</div>
-
-	<hr />
-	<h1>7. The Fix — A Memory-Based Steering Module on the Frozen VLA</h1>
-
-	<p>
-		The fix is a small <b>memory-based steering module</b> bolted onto a
-		<b>frozen</b> base VLA. It (i) builds a fixed-size memory <i>Z</i> from past ViT
-		features using a <b>GLA Linear-SSM</b> temporal mixer + <b>Perceiver</b>
-		compression, then (ii) injects <i>Z</i> back into the frozen ViT at intermediate
-		depths and adds a small residual to the action head. The base VLA is never
-		re-trained — only the small steering module is learned.
-	</p>
-
-	<div class='figure'>
-		<img src={fig('steering_module.png')} alt='Steering module added to the frozen VLA' />
-		<span class='caption'>
-			Learnable steering (peach) builds a fixed-size memory <i>Z</i> from past ViT
-			features via a <b>GLA temporal mixer (Linear SSM)</b> + <b>Perceiver
-			compression</b>, then injects it into the frozen ViT at L8 / L16 and into the
-			action head through gated residuals. The frozen base VLA (green) is never
-			re-trained.
-		</span>
-	</div>
-
-	<div class='block-statement'>
-		The steering module is what actually solves mean collapse on the 3rd-person
-		POMDP — recovering the performance lost by hiding the top-view.
-	</div>
-
-	<h2>7.1 Formulation</h2>
-
-	<p>
-		Past ViT features <i>h<sup>(ℓ)</sup><sub>t−k</sub></i> at depths
-		ℓ ∈ &#123;8, 16&#125;, k = 1, …, K:
-	</p>
-
-	<pre class='codebox'><code>{`(1) Linear SSM mix — fixed-size state, content-gated decay:
-    S_k = σ(g_k) ⊙ S_{k-1} + K_k^T V_k
-    O_k = Q_k S_k
-
-(2) Compress to m = 32 memory tokens (Perceiver cross-attention):
-    Z^(ℓ) = CrossAttn(Q_learn, O_{1:K}^(ℓ))   ∈ R^{32×d}
-
-(3) Gated residual injection into frozen ViT:
-    h~_t^(ℓ) = h_t^(ℓ) + σ(α_ℓ) · CrossAttn(h_t^(ℓ), Z^(ℓ))
-
-(4) Residual correction on frozen action head:
-    a_t = π_base(o_t)  +  σ(α_res) · Δ(Z^(16))
-                  ↑frozen↑`}</code></pre>
-
-	<h2>7.2 Why a State-Space Model?</h2>
-
-	<ul>
-		<li>
-			<b>Long token sequence.</b> Flattened past is
-			<i>T = K · N<sub>patch</sub></i> ∼ 2000 tokens. Quadratic attention is
-			<i>O(T²)</i>; a Linear SSM is <i>O(T)</i> with a fixed-size state <i>S</i>.
-		</li>
-		<li>
-			<b>Content-gated decay.</b> σ(<i>g<sub>t</sub></i>) learns a per-token forget —
-			more expressive than RetNet&apos;s fixed γ, more stable than plain linear
-			attention.
-		</li>
-		<li>
-			<b>Length extrapolation.</b> Train with <i>K</i> ∼ 𝒰[1, 32] + sinusoidal
-			temporal PE → robust at <i>K</i> = (64, 128) at inference.
-		</li>
-		<li>
-			<b>Identity-init gates.</b> σ(α) = 0 → the module starts as a no-op, recovers
-			the base VLA exactly, then learns corrections safely.
-		</li>
-	</ul>
-
-	<hr />
-	<h1>8. Bonus — Same Pathology on a GUI Agent</h1>
-
-	<p>
-		The exact same Markovian-on-<i>o<sub>t</sub></i> failure shows up in a real GUI
-		agent. <a href='https://github.com/stepfun-ai/gelab-zero'>GELab-Zero-4B-preview</a>,
-		a VLM-based agent, runs on a Duolingo &ldquo;tap the matching pairs&rdquo; quiz.
-		At every step it receives the current screenshot and emits Thought + Action.
-	</p>
-
-	<div class='figure'>
-		<img src={fig('gui_agent_case.png')} alt='Testing GELab-Zero on Duolingo matching quiz' />
-		<span class='caption'>
-			<span class='text-tt'>GELab-Zero-4B-preview</span> on a Duolingo matching quiz.
-			At every step the agent only sees the current screenshot.
-		</span>
-	</div>
-
-	<h2>8.1 The Loop-Case</h2>
-
-	<p>
-		Solved pairs turn slightly darker, but solved and fresh tiles look almost
-		identical — and the agent has no memory of which ones it already tapped. So it
-		re-taps a solved pair, the app rejects it, and the screen returns to the same
-		state.
-	</p>
-
-	<div class='figure'>
-		<img src={fig('gui_loop_case.png')} alt='GUI loop case — C → E → C → E …' />
-		<span class='caption'>
-			Loop-case definition. The agent re-taps a solved pair, the app rejects it,
-			the screen returns to the same state — <i>C → E → C → E …</i>. Same pathology
-			as the Ant POMDP: <i>o<sub>t</sub></i> (screenshot) ↛ <i>s<sub>t</sub></i>
-			(solved-set).
-		</span>
-	</div>
-
-	<div class='figure'>
-		<video controls muted loop playsinline preload='metadata' src={vid('gui_rollout.mp4')}></video>
-		<span class='caption-muted'>GUI agent rollout (sped up) — getting stuck in the loop.</span>
-	</div>
-
-	<hr />
-	<h1>9. Conclusion</h1>
-
-	<ul>
-		<li>
-			<b>Ant Maze</b> and the <b>GUI Loop-Case</b> fail the same way: a Markovian
-			policy on <i>o<sub>t</sub></i> loops because the past is invisible — that is
-			mean collapse on aliased states.
-		</li>
-		<li>
-			On the top-view input the task degenerates to a <b>coordinate VQA</b>; the
-			Qwen3-VL VLA reproduces the presentation result there. On the 3rd-person input
-			the same recipe collapses.
-		</li>
-		<li>
-			The fix is <b>memory + memory-based steering on a frozen VLA</b>: a Linear-SSM
-			temporal mixer, Perceiver compression, gated residual injection — recovering
-			the lost performance without re-training the base policy.
-		</li>
-	</ul>
-
-	<hr />
-	<h1>References</h1>
-	<ul>
-		<li>
-			Qwen3-VL —
-			<a href='https://arxiv.org/abs/2511.21631'>arxiv.org/abs/2511.21631</a>
-		</li>
-		<li>
-			OpenVLA-OFT —
-			<a href='https://openvla-oft.github.io/'>openvla-oft.github.io</a>
-		</li>
-		<li>
-			GELab-Zero —
-			<a href='https://github.com/stepfun-ai/gelab-zero'>github.com/stepfun-ai/gelab-zero</a>
-		</li>
-		<li>
-			OGBench —
-			<a href='https://seohong.me/projects/ogbench/'>seohong.me/projects/ogbench</a>
-		</li>
-	</ul>
-
-	<h1>Citation</h1>
-	<pre class='codebox'><code>{`@misc{kang2026meancollapse,
-  title={Mean Collapse is a Serious Bottleneck of VLA},
-  author={Kang, Minkyu and Kim, JinHo and Shin, Eunseop and Hwang, Dayeon},
-  year={2026},
-  howpublished={\\url{https://mk040412.github.io/Mean-Collapse-VLA/}},
-  note={Team Weasel}
-}`}</code></pre>
-
-	<h1>Acknowledgement</h1>
-	<p>
-		Sub-project of <a href='https://mk040412.github.io/Project-Weasel/'>Project Weasel</a>,
-		maintained by <a href='https://mk040412.github.io/'>Kang Minkyu</a>. Page style
-		adapted from Seohong Park&apos;s OGBench page.
-	</p>
+	<Fragment set:html={body} />
 </Layout>
