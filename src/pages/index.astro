@@ -20,14 +20,14 @@ const body = String.raw`
 <div class="tldr-box">
 	<h2>TL;DR</h2>
 	<p>
-		We train a <b>VLM-based VLA</b> on <span class="text-tt">OGBench Ant-Maze</span>
-		in two settings on the same Qwen3-VL 2B backbone (LoRA on ViT and the LLM
-		head, OpenVLA-OFT-style training):
+		On <span class="text-tt">OGBench Ant-Maze</span> we train a
+		<b>VLM-based VLA</b> (Qwen3-VL 2B + LoRA on ViT and the LLM head, OpenVLA-OFT
+		style) in two settings:
 	</p>
 	<ul>
 		<li>
 			<b>Top-view (MDP) — coordinate VQA.</b> Given the bird's-eye image plus
-			<span class="text-tt">Go to (x, y)</span>, the VLM emits the
+			<span class="text-tt">Go to (x, y)</span>, the VLM emits a sequence of
 			<b>intermediate trajectory waypoint coordinates</b>
 			$(x_1, y_1), \ldots, (x_K, y_K)$. A small low-level controller turns
 			waypoints into 8-DOF torques.
@@ -39,29 +39,25 @@ const body = String.raw`
 		</li>
 	</ul>
 	<p>
-		<b>Both settings mean-collapse</b>, and — counterintuitively — the
-		<b>top-view (MDP) collapse is more severe</b>. Beyond the classical
-		state-aliasing argument, there is a second cause specific to VLM-based VLA:
-		<b>ViT-level feature aliasing</b>. In the top-view, the ant and the goal
-		occupy only a few pixels per ViT patch, so the visual encoder produces
-		<b>near-identical features across the whole episode</b>. The 3rd-person view
-		fills the patches with scene-relevant content — different states look
-		different in feature space — so the policy is more grounded.
-	</p>
-	<p>
-		We verified this directly: feeding <b>higher-resolution top-view images</b>
-		into the ViT recovers performance on the top-view VQA.
+		<b>Both settings mean-collapse</b>, and the <b>top-view (MDP) collapse is the
+		more severe one</b>. In the bare top-view + direct-action setting success is
+		<b>0%</b>; only the coordinate-VQA reformulation makes top-view work at all.
+		Beyond classical state-aliasing, the cause specific to VLM-based VLA is
+		<b>ViT-level feature aliasing</b>: the ant covers only a few pixels in
+		top-view, ViT patch tokens are nearly constant across the episode, and the
+		LLM ends up averaging over many states. Higher-resolution top-view input
+		recovers performance — confirming the diagnosis.
 	</p>
 	<p>
 		A small <b>memory-based steering module</b> (GLA Linear-SSM + Perceiver,
-		injected into the <b>frozen</b> VLA) <b>solves mean collapse</b>: it raises
-		the success rate above the top-view MDP baseline without re-training the
-		base VLA.
+		injected into the <b>frozen</b> VLA) <b>solves mean collapse</b> on the
+		3rd-person POMDP, lifting the success rate above the top-view MDP baseline.
 	</p>
 	<p>
-		The same Markovian-on-$o_t$ pathology shows up on a real GUI agent
-		(<a href="https://github.com/stepfun-ai/gelab-zero">GELab-Zero-4B-preview</a>)
-		running a Duolingo &ldquo;tap the matching pairs&rdquo; quiz.
+		The same Markovian-on-$o_t$ pathology shows up beyond robotics — a real GUI
+		agent (<a href="https://github.com/stepfun-ai/gelab-zero">GELab-Zero-4B-preview</a>)
+		gets stuck in a <span class="text-tt">C → D → E → C → D → E → …</span> loop
+		on a Duolingo &ldquo;tap the matching pairs&rdquo; quiz.
 	</p>
 </div>
 
@@ -117,12 +113,8 @@ const body = String.raw`
 	When the optimal $\pi^{\star}(a \mid s^{(i)})$ for different $s^{(i)}$ point in
 	<b>opposite directions</b>, this average is a <b>degenerate output</b>: a
 	near-zero motion, a sideways drift, an oscillation. That is <b>mean collapse</b>.
-</p>
-
-<p>
-	On Ant-Maze, mean collapse appears <b>even on the privileged top-view (MDP)
-	input</b> — for a reason that is specific to VLM-based VLAs and that we
-	dissect in Section 6.
+	On Ant-Maze it appears <b>even on the privileged top-view (MDP) input</b> — for
+	a reason that is specific to VLM-based VLAs and that we dissect in Section 6.
 </p>
 
 <hr />
@@ -157,7 +149,7 @@ const body = String.raw`
 </ul>
 
 <div class="figure">
-	<img src="${fig('two_views.png')}" alt="Same world, two views — the source of mean collapse" />
+	<img src="${fig('two_views.png')}" alt="Same world, two views" />
 	<span class="caption">
 		Same world, two views. <b>Left:</b> top-view (MDP). <b>Right:</b> 3rd-person
 		(POMDP). The two settings differ only in observability.
@@ -219,16 +211,19 @@ const body = String.raw`
 </div>
 
 <hr />
-<h1>5. Both Views Mean-Collapse — and the Bare Top-View Collapses to 0%</h1>
+<h1>5. Both Views Mean-Collapse — Bare Top-View Collapses to 0%</h1>
 
 <p>
 	Naively the <b>top-view (MDP)</b> agent should be a clean upper bound — it sees
-	the underlying state, after all. In practice, the <b>direct action</b>
+	the underlying state, after all. In practice, the <b>direct-action</b>
 	top-view VLA exhibits the <b>most severe mean collapse</b>: the predicted
-	action sequence collapses toward near-zero displacement and the resulting
-	rollout is degenerate — the ant walks in place, drifts sideways, tips over,
-	or simply gets marked as failed and halts. <b>Success rate: 0%</b>
-	(see Section 5.3).
+	action sequence collapses toward near-zero displacement and the rollout is
+	degenerate — the ant walks in place, drifts sideways, tips over, or simply
+	gets marked as failed and halts. The trick that rescues top-view is the
+	<b>coordinate-VQA reformulation</b> from Section 4.2 — predicting waypoint
+	coordinates as text instead of low-level actions — which lifts the top-view
+	success rate to the value reported in the original presentation. We summarize
+	all four settings in the results table at the end of Section 7.
 </p>
 
 <p>
@@ -239,18 +234,11 @@ const body = String.raw`
 	ones.
 </p>
 
-<p>
-	The trick that rescues top-view is the <b>coordinate-VQA reformulation</b>
-	described in Section 4.2 — predict waypoint coordinates as text instead of
-	low-level actions — which lifts the top-view success rate to the value
-	reported in the original presentation.
-</p>
-
 <h2>5.1 Top-view (MDP) — different loop-case examples</h2>
 
 <p>
-	Each of the videos below is a <b>different example of the same loop / mean
-	collapse pathology</b> on the top-view input.
+	Each video below is a <b>different example of the same loop / mean-collapse
+	pathology</b> on the top-view input.
 </p>
 
 <div class="grid-2">
@@ -281,64 +269,7 @@ const body = String.raw`
 	</span>
 </div>
 
-<h2>5.3 Results — Top-view collapses to 0% without the VQA reformulation</h2>
-
-<p>
-	If we run the <b>top-view</b> input through the <b>direct action VLA head</b>
-	(no coordinate-VQA reformulation), success is <b>0%</b> — mean collapse is
-	total. Reformulating the top-view task as <b>coordinate VQA</b> over waypoints
-	recovers the success rate reported in the original presentation. On the
-	3rd-person input, the direct action VLA gets the partial-observability number
-	from the presentation, and adding the steering module of Section 7 raises it
-	above the top-view baseline.
-</p>
-
-<div class="results-table">
-	<table>
-		<thead>
-			<tr>
-				<th>Setting</th>
-				<th>Camera</th>
-				<th>Output head</th>
-				<th>Success rate</th>
-			</tr>
-		</thead>
-		<tbody>
-			<tr>
-				<td>Top-view, no VQA</td>
-				<td>Top-view (MDP)</td>
-				<td>Direct action chunk</td>
-				<td><b>0.00</b></td>
-			</tr>
-			<tr>
-				<td>Top-view, with VQA</td>
-				<td>Top-view (MDP)</td>
-				<td>Coordinate-VQA waypoints</td>
-				<td><b>0.53</b></td>
-			</tr>
-			<tr>
-				<td>3rd-person, baseline</td>
-				<td>3rd-person (POMDP)</td>
-				<td>Direct action chunk</td>
-				<td><b>0.16</b></td>
-			</tr>
-			<tr>
-				<td>3rd-person, with steering</td>
-				<td>3rd-person (POMDP)</td>
-				<td>Direct action + steering module</td>
-				<td><b>0.84</b></td>
-			</tr>
-		</tbody>
-	</table>
-	<span class="caption-muted">
-		Success rates reproduced from the Weasel toy experiment. Numbers for the
-		top-view-with-VQA, 3rd-person baseline, and 3rd-person-with-steering rows
-		match the presentation; the top-view-without-VQA row (0.00) is the
-		mean-collapse failure mode this post studies.
-	</span>
-</div>
-
-<h2>5.4 3rd-person (POMDP) — opportunistic successes</h2>
+<h2>5.3 3rd-person (POMDP) — opportunistic successes</h2>
 
 <p>
 	On the 3rd-person input the same Markovian recipe still mean-collapses, but
@@ -363,7 +294,7 @@ const body = String.raw`
 	The classical mean-collapse story (Section 1.1) is about <b>state aliasing in
 	the observation space</b>: two states map to similar pixel images. On the
 	top-view that argument should not apply — the underlying state $s_t$ is fully
-	visible. Yet top-view collapses harder. Why?
+	visible. Yet the bare top-view collapses to 0%. Why?
 </p>
 
 <p>
@@ -375,7 +306,7 @@ const body = String.raw`
 	<li>
 		<b>Tiny scene-relevant region.</b> In the top-view, the ant and the pink goal
 		together cover only a small fraction of the image. Each $14 \times 14$ ViT
-		patch sees mostly empty maze floor; the ant occupies just a handful of
+		patch sees mostly empty maze floor; the ant occupies only a handful of
 		pixels inside one or two patches.
 	</li>
 	<li>
@@ -388,14 +319,14 @@ const body = String.raw`
 		<b>Broad posterior</b> $p(s \mid \phi(o))$. With nearly constant ViT
 		features $\phi(o)$, the posterior over underlying states given features is
 		broad. The mean-collapse identity from Section 1.1 then forces the predicted
-		waypoints toward the average over many states — a near-zero displacement.
+		output toward the average over many states — a near-zero action.
 	</li>
 	<li>
 		<b>3rd-person is the opposite.</b> Scene-relevant content
 		(walls in front, corridor turns, the pink goal when it appears) <b>fills the
-		ViT patches</b>. The features change clearly from one observation to the
-		next, the per-feature posterior is sharper, and there is enough signal to
-		commit to a direction at each step.
+		ViT patches</b>. The features change clearly between observations, the
+		per-feature posterior is sharper, and there is enough signal to commit to a
+		direction at each step.
 	</li>
 </ul>
 
@@ -417,9 +348,9 @@ const body = String.raw`
 </p>
 
 <p>
-	This is a useful diagnostic: when a VLM-based VLA mean-collapses on a
-	supposedly-MDP input, suspect <b>resolution / feature aliasing</b> before
-	suspecting the policy class.
+	Useful diagnostic: when a VLM-based VLA mean-collapses on a supposedly-MDP
+	input, suspect <b>resolution / feature aliasing</b> before suspecting the
+	policy class.
 </p>
 
 <hr />
@@ -438,8 +369,8 @@ const body = String.raw`
 
 <div class="block-statement">
 	The steering module is what <b>solves mean collapse</b> on the 3rd-person
-	POMDP — recovering the success probability lost by hiding the top-view, and
-	surpassing the MDP top-view baseline.
+	POMDP — recovering the success probability lost to partial observability and
+	pushing past the top-view MDP baseline.
 </div>
 
 <h2>7.1 Formulation</h2>
@@ -507,6 +438,63 @@ const body = String.raw`
 	<li><b>Identity-init gates.</b> The module starts as a no-op, recovers the base VLA exactly, then learns corrections safely.</li>
 </ul>
 
+<h2>7.3 Results — full picture in one table</h2>
+
+<p>
+	With the cause and the fix in place, the four numbers tell the whole story.
+	The bare top-view + direct-action setting mean-collapses to 0%. The
+	coordinate-VQA reformulation (Section 4.2) lifts top-view to the presentation
+	number. The 3rd-person direct-action setting suffers from partial
+	observability. Adding the steering module (Section 7) on the 3rd-person input
+	pushes success past the top-view MDP baseline — without re-training the base
+	VLA.
+</p>
+
+<div class="results-table">
+	<table>
+		<thead>
+			<tr>
+				<th>Setting</th>
+				<th>Camera</th>
+				<th>Output head</th>
+				<th>Success rate</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td>Top-view, no VQA</td>
+				<td>Top-view (MDP)</td>
+				<td>Direct action chunk</td>
+				<td><b>0.00</b></td>
+			</tr>
+			<tr>
+				<td>Top-view, with VQA</td>
+				<td>Top-view (MDP)</td>
+				<td>Coordinate-VQA waypoints</td>
+				<td><b>0.53</b></td>
+			</tr>
+			<tr>
+				<td>3rd-person, baseline</td>
+				<td>3rd-person (POMDP)</td>
+				<td>Direct action chunk</td>
+				<td><b>0.16</b></td>
+			</tr>
+			<tr>
+				<td>3rd-person, with steering</td>
+				<td>3rd-person (POMDP)</td>
+				<td>Direct action + steering module</td>
+				<td><b>0.84</b></td>
+			</tr>
+		</tbody>
+	</table>
+	<span class="caption-muted">
+		Success rates reproduced from the Weasel toy experiment. Numbers for the
+		top-view-with-VQA, 3rd-person baseline, and 3rd-person-with-steering rows
+		match the presentation; the top-view-without-VQA row (0.00) is the
+		mean-collapse failure mode this post studies.
+	</span>
+</div>
+
 <hr />
 <h1>8. Bonus — Same Pathology on a GUI Agent</h1>
 
@@ -529,24 +517,39 @@ const body = String.raw`
 
 <p>
 	Solved pairs turn slightly darker, but solved and fresh tiles look almost
-	identical — and the agent has no memory of which ones it already tapped. So it
-	re-taps a solved pair, the app rejects it, and the screen returns to the same
-	state.
+	identical — and the agent has no memory of which ones it already tapped. So
+	it re-taps a solved pair, the app rejects it, the screen returns to the same
+	state, and the agent enters a three-step loop:
+</p>
+
+<p>
+	$$
+	C \;\rightarrow\; D \;\rightarrow\; E \;\rightarrow\; C \;\rightarrow\; D \;\rightarrow\; E \;\rightarrow\; \ldots
+	$$
 </p>
 
 <div class="figure">
-	<img src="${fig('gui_loop_case.png')}" alt="GUI loop case — C → E → C → E …" />
+	<img src="${fig('gui_loop_case.png')}" alt="GUI loop case — C → D → E → C → D → E …" />
 	<span class="caption">
-		Loop-case definition. The agent re-taps a solved pair, the app rejects it,
-		the screen returns to the same state — $C \rightarrow E \rightarrow C \rightarrow E \rightarrow \ldots$.
-		Same pathology as the Ant POMDP: $o_t$ (screenshot) $\not\Rightarrow s_t$
-		(solved-set).
+		Loop-case definition. Same pathology as the Ant POMDP: $o_t$ (screenshot)
+		$\not\Rightarrow s_t$ (solved-set).
 	</span>
 </div>
 
+<h2>8.2 GUI rollout — a separate loop-case example</h2>
+
+<p>
+	A different concrete instance of the same loop, captured live during a
+	GELab-Zero rollout:
+</p>
+
 <div class="figure">
 	<video controls muted loop playsinline preload="metadata" src="${vid('gui_rollout.mp4')}"></video>
-	<span class="caption-muted">GUI agent rollout (sped up) — getting stuck in the loop.</span>
+	<span class="caption-muted">
+		GUI agent rollout (sped up) — a separate loop-case example, distinct from
+		the Ant videos. The agent enters the
+		<span class="text-tt">C → D → E → C → D → E → …</span> cycle described above.
+	</span>
 </div>
 
 <hr />
@@ -554,11 +557,11 @@ const body = String.raw`
 
 <ul>
 	<li><b>Mean collapse is a major bottleneck for VLM-based VLAs.</b> A Markovian policy on $o_t$ is forced to output the posterior-weighted average of per-state optimal actions; when those disagree, the average is degenerate.</li>
-	<li><b>Even the privileged top-view input does not save you.</b> On Ant-Maze, the top-view (MDP) coordinate-VQA recipe collapses harder than the 3rd-person (POMDP) action recipe.</li>
-	<li><b>The cause is one level above pixels — ViT-level feature aliasing.</b> When the scene-relevant content covers only a few pixels (top-view), patch tokens are nearly constant across timesteps; the LLM sees almost the same input every step, and the mean-collapse identity drives the output toward zero. Higher-resolution top-view input fixes it.</li>
-	<li><b>3rd-person rollouts are POMDP but feature-rich</b> — the patches are filled with scene content, so the agent moves more and occasionally wins by exploration.</li>
-	<li><b>A small memory-based steering module on the frozen VLA</b> (GLA Linear-SSM + Perceiver, identity-init gated injection) is the lightweight fix that <b>raises the success rate</b>.</li>
-	<li><b>The same pathology shows up beyond robotics</b> — a frozen GUI agent on a Duolingo quiz loops for the same reason.</li>
+	<li><b>Even the privileged top-view does not save you.</b> On Ant-Maze, the bare top-view (MDP) direct-action setting collapses to <b>0%</b>; only the coordinate-VQA reformulation rescues it.</li>
+	<li><b>The cause one level above pixels is ViT-level feature aliasing.</b> When the scene-relevant content covers only a few pixels, patch tokens are nearly constant across timesteps; the LLM sees almost the same input every step. Higher-resolution top-view input fixes it.</li>
+	<li><b>3rd-person is POMDP but feature-rich</b> — patches are filled with scene content, so the agent moves more and occasionally wins by exploration.</li>
+	<li><b>A small memory-based steering module on the frozen VLA</b> (GLA Linear-SSM + Perceiver, identity-init gated injection) is the lightweight fix that <b>raises the 3rd-person success rate above the top-view MDP baseline</b> without re-training the base VLA.</li>
+	<li><b>The same pathology shows up beyond robotics</b> — a frozen GUI agent on a Duolingo quiz enters the same <span class="text-tt">C → D → E → …</span> loop for the same reason.</li>
 </ul>
 
 <hr />
@@ -582,7 +585,7 @@ const body = String.raw`
 <Layout
 	title='Mean Collapse is a Serious Bottleneck of VLA'
 	pageTitle='Mean Collapse in VLA'
-	description='On a small Ant-Maze setup, both the top-view (MDP coordinate-VQA) and 3rd-person (POMDP direct-action) variants of a VLM-based VLA mean-collapse — and the top-view collapse is more severe due to ViT-level feature aliasing. A small memory-based steering module on the frozen VLA recovers the lost performance.'
+	description='On a small Ant-Maze setup, both the top-view (MDP coordinate-VQA) and 3rd-person (POMDP direct-action) variants of a VLM-based VLA mean-collapse — and the bare top-view collapses to 0% due to ViT-level feature aliasing. A memory-based steering module on the frozen VLA recovers the lost performance.'
 	authors={authors}
 	links={links}
 	hero={fig('ant_hero.png')}
