@@ -22,19 +22,28 @@ const body = String.raw`
 <div class="tldr-box">
 	<h2>TL;DR</h2>
 	<p>
-		On <span class="text-tt">OGBench Ant-Maze</span> we train a
-		<b>VLM-based VLA</b> in the <a href="https://openvla-oft.github.io/">OpenVLA-OFT</a>
-		style on top of a <a href="https://arxiv.org/abs/2511.21631">Qwen3-VL 2B</a>
-		backbone. The instruction is a <b>coordinate VQA</b>: given an image plus
-		<span class="text-tt">Go to (x, y)</span>, the model outputs the
-		<b>intermediate trajectory waypoint coordinates</b>
-		$(x_1, y_1), (x_2, y_2), \ldots$
+		We train a <b>VLM-based VLA</b> on <span class="text-tt">OGBench Ant-Maze</span>
+		in two settings:
 	</p>
+	<ul>
+		<li>
+			<b>Top-view (MDP) — coordinate VQA.</b> Given the bird's-eye image plus
+			<span class="text-tt">Go to (x, y)</span>, the VLM emits the
+			<b>intermediate trajectory waypoint coordinates</b>
+			$(x_1, y_1), \ldots, (x_K, y_K)$. A small low-level controller turns
+			waypoints into 8-DOF torques.
+		</li>
+		<li>
+			<b>3rd-person (POMDP) — direct action VLA.</b> Same backbone, same
+			OpenVLA-OFT-style training, but the model decodes the action chunk
+			directly from the partial 3rd-person observation.
+		</li>
+	</ul>
 	<p>
-		<b>Both views mean-collapse</b> when the policy acts on the latest observation
-		only — and the <b>top-view (MDP) collapse is more severe</b>: the agent walks
-		in place, twitches, falls over, gets frozen. The 3rd-person POMDP rollouts
-		actually move more and occasionally find the pink goal opportunistically.
+		<b>Both settings mean-collapse</b>, and — counterintuitively — the
+		<b>top-view (MDP) collapse is more severe</b>: the agent walks in place,
+		twitches, falls over, gets frozen for tens of seconds. The 3rd-person POMDP
+		rollouts move more and occasionally find the pink goal opportunistically.
 	</p>
 	<p>
 		A small <b>memory-based steering module</b> (GLA Linear-SSM + Perceiver,
@@ -53,8 +62,7 @@ const body = String.raw`
 
 <p>
 	A <b>Markov Decision Process</b> $\mathcal{M} = (\mathcal{S}, \mathcal{A}, P, R, \gamma)$
-	gives the agent the underlying state $s_t$ at every step, so the optimal policy
-	is Markovian on the state:
+	gives the agent the underlying state $s_t$ at every step:
 </p>
 
 <p>$$\pi^{\star}_{\mathrm{MDP}}(a_t \mid s_t).$$</p>
@@ -63,14 +71,14 @@ const body = String.raw`
 	A <b>Partially Observable MDP</b>
 	$\mathcal{P} = (\mathcal{S}, \mathcal{A}, \mathcal{O}, P, R, \Omega, \gamma)$
 	hides the state behind an observation kernel
-	$o_t \sim \Omega(\cdot \mid s_t)$. The optimal policy now conditions on the full
-	history (or on a belief $b_t$):
+	$o_t \sim \Omega(\cdot \mid s_t)$. The optimal policy must condition on history
+	(or on a belief $b_t$):
 </p>
 
 <p>
 	$$
 	\pi^{\star}_{\mathrm{POMDP}}(a_t \mid h_t),\qquad
-	h_t = (o_0, a_0, o_1, a_1, \ldots, o_t).
+	h_t = (o_0, a_0, \ldots, o_t).
 	$$
 </p>
 
@@ -82,13 +90,12 @@ const body = String.raw`
 
 <p>
 	A <b>VLM-based VLA trained to act on the latest observation only</b> learns a
-	Markovian policy $\pi(a_t \mid o_t)$. On a POMDP input, several distinct
-	underlying states can map to similar observations:
-	$s^{(1)} \neq s^{(2)} \neq \cdots$ but
-	$o^{(1)} \approx o^{(2)} \approx o$ (visual aliasing in 3rd-person Ant-Maze).
-	Since the training data is collected from optimal trajectories on the underlying
-	$s^{(i)}$, the loss is minimized when the policy produces the
-	<b>posterior-weighted average</b> of the true optimal actions:
+	Markovian policy $\pi(a_t \mid o_t)$. When several distinct underlying states
+	alias to similar observations
+	($s^{(1)} \neq s^{(2)} \neq \cdots$ but
+	$o^{(1)} \approx o^{(2)} \approx o$), the squared/cross-entropy loss is
+	minimized by the <b>posterior-weighted average</b> of the per-state optimal
+	actions:
 </p>
 
 <p>
@@ -101,11 +108,11 @@ const body = String.raw`
 
 <p>
 	When the optimal $\pi^{\star}(a \mid s^{(i)})$ for different $s^{(i)}$ point in
-	<b>opposite directions</b> — &ldquo;turn left&rdquo; vs. &ldquo;turn right&rdquo;,
-	&ldquo;step forward&rdquo; vs. &ldquo;step back&rdquo; — their average is a
-	<b>degenerate motion</b>: walks in place, sideways drift, falling over, or
-	loops between two actions. That is <b>mean collapse</b>, and on Ant-Maze it
-	shows up <b>even on the privileged top-view (MDP) input</b> (see Section 5).
+	<b>opposite directions</b> — &ldquo;left&rdquo; vs. &ldquo;right&rdquo;,
+	&ldquo;forward&rdquo; vs. &ldquo;back&rdquo; — the average is a <b>degenerate
+	output</b>: a near-zero motion, a sideways drift, an oscillation. That is
+	<b>mean collapse</b>. As Section 5 shows, it appears on Ant-Maze
+	<b>even when the input is the privileged top-view</b>.
 </p>
 
 <hr />
@@ -115,15 +122,15 @@ const body = String.raw`
 	Most VLA benchmarks are effectively MDPs: the current scene already encodes the
 	task-relevant state, so a policy reading only the latest observation looks fine
 	(<span class="text-tt">LIBERO</span>, <span class="text-tt">SIMPLER</span>).
-	GUI agents (<span class="text-tt">UI-TARS</span>-style) decide each action from a
-	<b>summary plus the current screenshot only</b>. Both setups assume
+	GUI agents (<span class="text-tt">UI-TARS</span>-style) decide each action from
+	a <b>summary plus the current screenshot only</b>. Both setups assume
 	$\pi(a_t \mid o_t)$ suffices.
 </p>
 <p>
 	But real long-horizon tasks (Minecraft, GUI agents, manipulation under
 	occlusion) need <b>history</b> $h_t$, not just $o_t$. Crafting a pickaxe needs
-	the fact &ldquo;I already chopped a tree&rdquo; — and that fact is not in the
-	current screen.
+	the fact &ldquo;I already chopped a tree&rdquo; — which is not in the current
+	screen.
 </p>
 
 <hr />
@@ -135,16 +142,15 @@ const body = String.raw`
 </p>
 
 <ul>
-	<li><b>Top-view (MDP).</b> $o_t = s_t$: full position, goal, and maze layout.</li>
-	<li><b>3rd-person view (POMDP).</b> $o_t \sim \Omega(\cdot \mid s_t)$: only what is in front of the ant. Visually similar 3rd-person frames can correspond to <b>different</b> next steps — the source of mean collapse.</li>
+	<li><b>Top-view (MDP).</b> $o_t = s_t$ — full position, goal, and maze layout.</li>
+	<li><b>3rd-person (POMDP).</b> $o_t \sim \Omega(\cdot \mid s_t)$ — only what is in front of the ant. Visually similar 3rd-person frames can correspond to <b>different</b> next steps.</li>
 </ul>
 
 <div class="figure">
 	<img src="${fig('two_views.png')}" alt="Same world, two views — the source of mean collapse" />
 	<span class="caption">
 		Same world, two views. <b>Left:</b> top-view (MDP). <b>Right:</b> 3rd-person
-		(POMDP). Visually similar 3rd-person frames can correspond to different
-		underlying states.
+		(POMDP). The two settings differ only in observability.
 	</span>
 </div>
 
@@ -165,91 +171,94 @@ const body = String.raw`
 	<li>Hindsight relabeling: chunk $K = 16$, terminal-goal fraction $0.25$.</li>
 </ul>
 
-<h2>4.2 Task — Coordinate VQA</h2>
+<h2>4.2 Two policy heads, one backbone</h2>
+
 <p>
-	We frame Ant-Maze navigation as a <b>coordinate VQA</b> on the VLM:
+	The same backbone — <a href="https://arxiv.org/abs/2511.21631">Qwen3-VL 2B</a>,
+	fine-tuned in the <a href="https://openvla-oft.github.io/">OpenVLA-OFT</a> style
+	(LoRA on ViT and the LLM head, parallel chunk decode) — is used in two settings
+	with different output heads:
 </p>
+
 <ul>
-	<li><b>Input:</b> current image $o_t$ (top-view <i>or</i> 3rd-person) plus the instruction <span class="text-tt">"Go to (x, y)."</span></li>
-	<li><b>Output:</b> a sequence of <b>intermediate trajectory waypoint coordinates</b> $(x_1, y_1), (x_2, y_2), \ldots, (x_K, y_K)$ that the ant should pass through on the way to $(x, y)$.</li>
-	<li>A small low-level controller turns those waypoints into the underlying $8$-DOF torques.</li>
+	<li>
+		<b>Top-view (MDP) — coordinate VQA.</b> Input: top-view image $o_t^{\,\text{top}}$
+		plus <span class="text-tt">Go to (x, y)</span>. Output: a sequence of
+		intermediate trajectory waypoint coordinates
+		$(x_1, y_1), (x_2, y_2), \ldots, (x_K, y_K)$ as text tokens. A small
+		low-level controller turns waypoints into 8-DOF torques.
+	</li>
+	<li>
+		<b>3rd-person (POMDP) — direct action VLA.</b> Input: 3rd-person image
+		$o_t^{\,\text{3rd}}$ plus the same instruction. Output: a parallel-decoded
+		<b>action chunk</b> directly in joint-torque space (OpenVLA-OFT default).
+	</li>
 </ul>
 
-<h2>4.3 Model — VLM-based VLA, OpenVLA-OFT style</h2>
 <div class="figure">
 	<img src="${fig('ant_vla_training.png')}" alt="Ant VLA training pipeline" />
 	<span class="caption">
-		$(o_t,\;\text{instr},\;\text{proprio}) \rightarrow$ Qwen3-VL 2B
-		$\rightarrow$ <b>parallel-decoded waypoint chunk</b>
-		$(x_1, y_1), \ldots, (x_K, y_K)$.
+		One backbone (Qwen3-VL 2B + LoRA on ViT and LLM head), two output heads
+		(top-view coordinate-VQA waypoints; 3rd-person direct action chunk).
 	</span>
 </div>
-<ul>
-	<li><b>VLM backbone.</b> <a href="https://arxiv.org/abs/2511.21631">Qwen3-VL 2B</a>
-		(<span class="text-tt">Qwen/Qwen3-VL-2B-Instruct</span>, hidden dim $2048$).</li>
-	<li><b>Style.</b> <a href="https://openvla-oft.github.io/">OpenVLA-OFT</a> — both ViT and the LLM head are fine-tuned with LoRA; the action chunk is decoded in parallel.</li>
-	<li><b>Output head.</b> Coordinate VQA — the model emits the next $K$ waypoint coordinates as text tokens for $(x_i, y_i)$.</li>
-	<li><b>Training data.</b> The AntMaze paired dataset described in 4.1, with the language prompt of 4.2.</li>
-</ul>
 
 <div class="block-statement">
-	One VLA per camera (top-view vs. 3rd-person). The <b>only difference between the two
-	settings is observability</b> — same backbone, same training recipe, same prompts.
+	The only thing that differs between the two settings is observability and the
+	output head — same backbone, same data, same training recipe.
 </div>
 
 <hr />
-<h1>5. Both Views Mean-Collapse — and Top-View is Worse</h1>
+<h1>5. Both Views Mean-Collapse — and the Top-View Collapse is Worse</h1>
 
 <p>
 	Naively one might expect the <b>top-view (MDP)</b> agent to be a clean upper
-	bound: it sees the underlying state, so the coordinate-VQA task should be
-	straightforward. In practice, the top-view trained Qwen3-VL VLA exhibits the
-	<b>most severe mean collapse</b> — degenerate gait, twitching in place, falling
-	over, getting frozen. Even though the input is the privileged top-view, the
-	model produces near-degenerate waypoint sequences, and the low-level controller
-	turns those into a degenerate motion.
+	bound: it sees the underlying state, and on top-view we have already simplified
+	the task to a coordinate-VQA over waypoints. In practice, the top-view trained
+	Qwen3-VL VLA exhibits the <b>most severe mean collapse</b> — the predicted
+	waypoint sequence collapses toward a near-zero displacement and the resulting
+	gait is degenerate: walks in place, sideways drift, falling over, frozen
+	agents.
 </p>
 
 <p>
-	The <b>3rd-person (POMDP)</b> rollouts also mean-collapse, but the failure
-	is <b>less degenerate</b> in motion: the agent actually walks around, explores
+	The <b>3rd-person (POMDP)</b> rollouts also mean-collapse, but the failure is
+	<b>less degenerate in motion</b>: the agent actually walks around, explores
 	corridors, and occasionally — when the pink goal happens to come into view —
 	turns and dives into it. These are <b>opportunistic</b> wins, not principled
 	ones.
 </p>
 
-<h2>5.1 Mean-collapse failure modes (top-view, MDP)</h2>
+<h2>5.1 Top-view (MDP) — degenerate / falling collapse</h2>
 
 <div class="grid-2">
 	<div class="figure">
 		<video controls muted loop playsinline preload="metadata" src="${vid('fail_falling.mp4')}"></video>
 		<span class="caption-muted">
-			Top-view, no memory — falling-over collapse. The model emits a near-degenerate
-			waypoint sequence, the low-level controller produces a degenerate gait, the
-			ant tips over repeatedly.
+			Falling-over collapse. The waypoint sequence collapses toward a degenerate
+			motion; the controller flips the ant repeatedly.
 		</span>
 	</div>
 	<div class="figure">
 		<video controls muted loop playsinline preload="metadata" src="${vid('fail_loop.mp4')}"></video>
 		<span class="caption-muted">
-			Top-view, no memory — looping/stalled collapse. The agent twitches in place
-			and cycles between the same two actions.
+			Looping / stalled collapse. The agent twitches in place and cycles between
+			the same two actions.
 		</span>
 	</div>
 </div>
 
-<h2>5.2 Extreme stuck case — <span class="text-tt">Mean_Collapse_After_40</span></h2>
+<h2>5.2 Top-view extreme stuck case — <span class="text-tt">Mean_Collapse_After_40</span></h2>
 
 <div class="figure">
 	<video controls muted loop playsinline preload="metadata" src="${vid('mean_collapse_after_40.mp4')}"></video>
 	<span class="caption-muted">
-		Extreme mean collapse on the top-view input. After ~step 40 the predicted
-		waypoints collapse to a near-zero mean and the ant is frozen in place for the
-		rest of the rollout.
+		After ~step 40 the predicted waypoints collapse to a near-zero mean and the
+		ant is frozen in place for the rest of the rollout.
 	</span>
 </div>
 
-<h2>5.3 Opportunistic 3rd-person rollouts (POMDP)</h2>
+<h2>5.3 3rd-person (POMDP) — opportunistic successes</h2>
 
 <p>
 	On the 3rd-person input the same Markovian recipe still mean-collapses, but
@@ -276,15 +285,15 @@ const body = String.raw`
 		Learnable steering (peach) builds a fixed-size memory $Z$ from past ViT
 		features via a <b>GLA temporal mixer (Linear SSM)</b> + <b>Perceiver
 		compression</b>, then injects it into the frozen ViT at L8 / L16 and into the
-		action head through gated residuals. The <b>frozen base VLA (green) is never
-		re-trained</b>.
+		action head through gated residuals. The frozen base VLA (green) is never
+		re-trained.
 	</span>
 </div>
 
 <div class="block-statement">
-	The steering module is what <b>solves mean collapse</b> on the 3rd-person
-	POMDP — recovering the success probability lost by hiding the top-view, and
-	surpassing the MDP top-view baseline.
+	The steering module is what <b>solves mean collapse</b>: it raises the
+	3rd-person success rate above the top-view MDP baseline, without re-training
+	the base VLA.
 </div>
 
 <h2>6.1 Formulation</h2>
@@ -305,8 +314,8 @@ const body = String.raw`
 </p>
 
 <p>
-	The mixed sequence $O^{(\ell)}_{1:K}$ is then compressed to $m = 32$ memory
-	tokens by a <b>Perceiver</b> cross-attention with learnable queries
+	The mixed sequence $O^{(\ell)}_{1:K}$ is compressed to $m = 32$ memory tokens
+	via a <b>Perceiver</b> cross-attention with learnable queries
 	$Q_{\text{learn}} \in \mathbb{R}^{m \times d}$:
 </p>
 
@@ -317,8 +326,8 @@ const body = String.raw`
 </p>
 
 <p>
-	The memory is <b>gated-residual injected</b> back into the frozen ViT at
-	depths $\ell \in \{8, 16\}$:
+	The memory is <b>gated-residual injected</b> back into the frozen ViT at depths
+	$\ell \in \{8, 16\}$:
 </p>
 
 <p>
@@ -398,10 +407,11 @@ const body = String.raw`
 <h1>8. Takeaway</h1>
 
 <ul>
-	<li>On a small Ant-Maze setup, a <b>VLM-based VLA</b> trained on the latest observation only <b>mean-collapses</b> on POMDP inputs — degenerate gait, falling over, frozen agents.</li>
-	<li>The task is set up as a <b>coordinate VQA</b> — given <span class="text-tt">Go to (x, y)</span>, the VLM emits intermediate waypoint coordinates. <b>Both views collapse</b>, and the top-view (MDP) collapse is more severe than the 3rd-person (POMDP) one — privileged observation is not enough to escape mean collapse.</li>
-	<li>A <b>memory-based steering module on the frozen VLA</b> (GLA Linear-SSM + Perceiver, identity-init gated injection) is the lightweight fix that <b>raises the success rate</b> on the 3rd-person POMDP back above the top-view MDP baseline.</li>
-	<li>The Markovian-on-$o_t$ pathology is not specific to robotics — the same loop-case shows up on a GUI agent.</li>
+	<li><b>Mean collapse is a major bottleneck for VLM-based VLAs.</b> A Markovian policy on $o_t$ is forced to output the posterior-weighted average of per-state optimal actions; when those disagree, the average is degenerate.</li>
+	<li><b>Even the privileged top-view input does not save you.</b> On Ant-Maze the top-view (MDP) coordinate-VQA recipe collapses harder than the 3rd-person (POMDP) action recipe.</li>
+	<li><b>3rd-person rollouts move more</b> and occasionally win opportunistically — exploration is sometimes enough to find the goal in spite of mean collapse.</li>
+	<li><b>A small memory-based steering module on the frozen VLA</b> (GLA Linear-SSM + Perceiver, identity-init gated injection) is the lightweight fix that <b>raises the success rate</b>.</li>
+	<li><b>The same pathology shows up beyond robotics</b> — a frozen GUI agent on a Duolingo quiz loops for the same reason.</li>
 </ul>
 
 <hr />
@@ -425,7 +435,7 @@ const body = String.raw`
 <Layout
 	title='Mean Collapse is a Serious Bottleneck of VLA'
 	pageTitle='Mean Collapse in VLA'
-	description='Even on a small Ant-Maze setup, a VLM-based VLA that acts on the latest observation only mean-collapses on POMDP inputs. A small memory-based steering module on the frozen VLA recovers the lost performance.'
+	description='On a small Ant-Maze setup, both the top-view (MDP coordinate-VQA) and 3rd-person (POMDP direct-action) variants of a VLM-based VLA mean-collapse — and the top-view collapse is more severe. A small memory-based steering module on the frozen VLA recovers the lost performance.'
 	authors={authors}
 	links={links}
 	hero={fig('ant_hero.png')}
