@@ -21,7 +21,8 @@ const body = String.raw`
 	<h2>TL;DR</h2>
 	<p>
 		We train a <b>VLM-based VLA</b> on <span class="text-tt">OGBench Ant-Maze</span>
-		in two settings:
+		in two settings on the same Qwen3-VL 2B backbone (LoRA on ViT and the LLM
+		head, OpenVLA-OFT-style training):
 	</p>
 	<ul>
 		<li>
@@ -33,20 +34,29 @@ const body = String.raw`
 		</li>
 		<li>
 			<b>3rd-person (POMDP) — direct action VLA.</b> Same backbone, same
-			OpenVLA-OFT-style training, but the model decodes the action chunk
-			directly from the partial 3rd-person observation.
+			recipe, but the head decodes the action chunk directly from the partial
+			3rd-person observation.
 		</li>
 	</ul>
 	<p>
 		<b>Both settings mean-collapse</b>, and — counterintuitively — the
-		<b>top-view (MDP) collapse is more severe</b>: the agent walks in place,
-		twitches, falls over, gets frozen for tens of seconds. The 3rd-person POMDP
-		rollouts move more and occasionally find the pink goal opportunistically.
+		<b>top-view (MDP) collapse is more severe</b>. Beyond the classical
+		state-aliasing argument, there is a second cause specific to VLM-based VLA:
+		<b>ViT-level feature aliasing</b>. In the top-view, the ant and the goal
+		occupy only a few pixels per ViT patch, so the visual encoder produces
+		<b>near-identical features across the whole episode</b>. The 3rd-person view
+		fills the patches with scene-relevant content — different states look
+		different in feature space — so the policy is more grounded.
+	</p>
+	<p>
+		We verified this directly: feeding <b>higher-resolution top-view images</b>
+		into the ViT recovers performance on the top-view VQA.
 	</p>
 	<p>
 		A small <b>memory-based steering module</b> (GLA Linear-SSM + Perceiver,
-		injected into the <b>frozen</b> VLA) <b>solves mean collapse</b> and raises
-		the success rate.
+		injected into the <b>frozen</b> VLA) <b>solves mean collapse</b>: it raises
+		the success rate above the top-view MDP baseline without re-training the
+		base VLA.
 	</p>
 	<p>
 		The same Markovian-on-$o_t$ pathology shows up on a real GUI agent
@@ -87,13 +97,12 @@ const body = String.raw`
 <h2>1.1 Why Mean Collapse Happens</h2>
 
 <p>
-	A <b>VLM-based VLA trained to act on the latest observation only</b> learns a
+	A VLM-based VLA trained to act on the latest observation only learns a
 	Markovian policy $\pi(a_t \mid o_t)$. When several distinct underlying states
 	alias to similar observations
 	($s^{(1)} \neq s^{(2)} \neq \cdots$ but
-	$o^{(1)} \approx o^{(2)} \approx o$), the squared/cross-entropy loss is
-	minimized by the <b>posterior-weighted average</b> of the per-state optimal
-	actions:
+	$o^{(1)} \approx o^{(2)} \approx o$), the loss is minimized by the
+	<b>posterior-weighted average</b> of the per-state optimal actions:
 </p>
 
 <p>
@@ -106,11 +115,14 @@ const body = String.raw`
 
 <p>
 	When the optimal $\pi^{\star}(a \mid s^{(i)})$ for different $s^{(i)}$ point in
-	<b>opposite directions</b> — &ldquo;left&rdquo; vs. &ldquo;right&rdquo;,
-	&ldquo;forward&rdquo; vs. &ldquo;back&rdquo; — the average is a <b>degenerate
-	output</b>: a near-zero motion, a sideways drift, an oscillation. That is
-	<b>mean collapse</b>. As Section 5 shows, it appears on Ant-Maze
-	<b>even when the input is the privileged top-view</b>.
+	<b>opposite directions</b>, this average is a <b>degenerate output</b>: a
+	near-zero motion, a sideways drift, an oscillation. That is <b>mean collapse</b>.
+</p>
+
+<p>
+	On Ant-Maze, mean collapse appears <b>even on the privileged top-view (MDP)
+	input</b> — for a reason that is specific to VLM-based VLAs and that we
+	dissect in Section 6.
 </p>
 
 <hr />
@@ -140,8 +152,8 @@ const body = String.raw`
 </p>
 
 <ul>
-	<li><b>Top-view (MDP).</b> $o_t = s_t$ — full position, goal, and maze layout.</li>
-	<li><b>3rd-person (POMDP).</b> $o_t \sim \Omega(\cdot \mid s_t)$ — only what is in front of the ant. Visually similar 3rd-person frames can correspond to <b>different</b> next steps.</li>
+	<li><b>Top-view (MDP).</b> $o_t = s_t$ — full position, goal, and maze layout in one bird's-eye image.</li>
+	<li><b>3rd-person (POMDP).</b> $o_t \sim \Omega(\cdot \mid s_t)$ — only what is in front of the ant.</li>
 </ul>
 
 <div class="figure">
@@ -156,7 +168,7 @@ const body = String.raw`
 <h1>4. Setup</h1>
 
 <p>
-	Concrete numbers, taken from the
+	Concrete numbers, from the
 	<a href="https://github.com/MK040412/Weasel_toy_experiment">Weasel Toy Experiment</a>
 	repository.
 </p>
@@ -210,13 +222,12 @@ const body = String.raw`
 <h1>5. Both Views Mean-Collapse — and the Top-View Collapse is Worse</h1>
 
 <p>
-	Naively one might expect the <b>top-view (MDP)</b> agent to be a clean upper
-	bound: it sees the underlying state, and on top-view we have already simplified
-	the task to a coordinate-VQA over waypoints. In practice, the top-view trained
-	Qwen3-VL VLA exhibits the <b>most severe mean collapse</b> — the predicted
-	waypoint sequence collapses toward a near-zero displacement and the resulting
-	gait is degenerate: walks in place, sideways drift, falling over, frozen
-	agents.
+	Naively the <b>top-view (MDP)</b> agent should be a clean upper bound — it sees
+	the underlying state, and the task is reduced to coordinate VQA over waypoints.
+	In practice, the top-view trained Qwen3-VL VLA exhibits the <b>most severe mean
+	collapse</b>: the predicted waypoint sequence collapses toward a near-zero
+	displacement and the resulting gait is degenerate — walks in place, sideways
+	drift, falling over, frozen agents.
 </p>
 
 <p>
@@ -275,7 +286,73 @@ const body = String.raw`
 </div>
 
 <hr />
-<h1>6. The Fix — A Memory-Based Steering Module on the Frozen VLA</h1>
+<h1>6. Why the Top-View Collapse is Worse — ViT-Level Feature Aliasing</h1>
+
+<p>
+	The classical mean-collapse story (Section 1.1) is about <b>state aliasing in
+	the observation space</b>: two states map to similar pixel images. On the
+	top-view that argument should not apply — the underlying state $s_t$ is fully
+	visible. Yet top-view collapses harder. Why?
+</p>
+
+<p>
+	The aliasing happens <b>one level above the pixels</b>, in the
+	<b>ViT feature space</b>:
+</p>
+
+<ul>
+	<li>
+		<b>Tiny scene-relevant region.</b> In the top-view, the ant and the pink goal
+		together cover only a small fraction of the image. Each $14 \times 14$ ViT
+		patch sees mostly empty maze floor; the ant occupies just a handful of
+		pixels inside one or two patches.
+	</li>
+	<li>
+		<b>Near-identical patch features across the episode.</b> Because the maze
+		layout is the same and only a few pixels carry the state, the ViT patch
+		tokens are <b>close to constant across timesteps</b>. From the LLM's point of
+		view the input embedding barely moves — &ldquo;every scene looks the same.&rdquo;
+	</li>
+	<li>
+		<b>Broad posterior</b> $p(s \mid \phi(o))$. With nearly constant ViT
+		features $\phi(o)$, the posterior over underlying states given features is
+		broad. The mean-collapse identity from Section 1.1 then forces the predicted
+		waypoints toward the average over many states — a near-zero displacement.
+	</li>
+	<li>
+		<b>3rd-person is the opposite.</b> Scene-relevant content
+		(walls in front, corridor turns, the pink goal when it appears) <b>fills the
+		ViT patches</b>. The features change clearly from one observation to the
+		next, the per-feature posterior is sharper, and there is enough signal to
+		commit to a direction at each step.
+	</li>
+</ul>
+
+<div class="block-statement">
+	Top-view <b>has the state, but loses it inside the ViT</b>. 3rd-person is
+	formally a POMDP, yet its features are sharper — so the Markovian-VLA failure
+	mode is less violent.
+</div>
+
+<h2>6.1 Sanity check — higher-resolution top-view fixes it</h2>
+
+<p>
+	If ViT-level feature aliasing is really the cause, then giving the ViT more
+	pixels per scene should sharpen the features and reduce collapse. We confirmed
+	this directly: feeding <b>higher-resolution top-view images</b> into the ViT
+	(at the same coordinate-VQA prompt) <b>recovers performance on the top-view
+	task</b>. Same backbone, same training, same head — only the input resolution
+	changes.
+</p>
+
+<p>
+	This is a useful diagnostic: when a VLM-based VLA mean-collapses on a
+	supposedly-MDP input, suspect <b>resolution / feature aliasing</b> before
+	suspecting the policy class.
+</p>
+
+<hr />
+<h1>7. The Fix — A Memory-Based Steering Module on the Frozen VLA</h1>
 
 <div class="figure">
 	<img src="${fig('steering_module.png')}" alt="Steering module added to the frozen VLA" />
@@ -289,12 +366,12 @@ const body = String.raw`
 </div>
 
 <div class="block-statement">
-	The steering module is what <b>solves mean collapse</b>: it raises the
-	3rd-person success rate above the top-view MDP baseline, without re-training
-	the base VLA.
+	The steering module is what <b>solves mean collapse</b> on the 3rd-person
+	POMDP — recovering the success probability lost by hiding the top-view, and
+	surpassing the MDP top-view baseline.
 </div>
 
-<h2>6.1 Formulation</h2>
+<h2>7.1 Formulation</h2>
 
 <p>
 	Past ViT features $h^{(\ell)}_{t-k}$ at depths $\ell \in \{8, 16\}$ for
@@ -350,7 +427,7 @@ const body = String.raw`
 	corrections.
 </p>
 
-<h2>6.2 Why a State-Space Model?</h2>
+<h2>7.2 Why a State-Space Model?</h2>
 
 <ul>
 	<li><b>Long sequence.</b> Flattened past is $T = K \cdot N_{\text{patch}} \sim 2{,}000$ tokens. Quadratic attention is $\mathcal{O}(T^2)$; a Linear SSM is $\mathcal{O}(T)$ with a fixed-size state $S$.</li>
@@ -360,7 +437,7 @@ const body = String.raw`
 </ul>
 
 <hr />
-<h1>7. Bonus — Same Pathology on a GUI Agent</h1>
+<h1>8. Bonus — Same Pathology on a GUI Agent</h1>
 
 <p>
 	The exact same Markovian-on-$o_t$ failure shows up in a real GUI agent.
@@ -377,7 +454,7 @@ const body = String.raw`
 	</span>
 </div>
 
-<h2>7.1 The Loop-Case</h2>
+<h2>8.1 The Loop-Case</h2>
 
 <p>
 	Solved pairs turn slightly darker, but solved and fresh tiles look almost
@@ -402,12 +479,13 @@ const body = String.raw`
 </div>
 
 <hr />
-<h1>8. Takeaway</h1>
+<h1>9. Takeaway</h1>
 
 <ul>
 	<li><b>Mean collapse is a major bottleneck for VLM-based VLAs.</b> A Markovian policy on $o_t$ is forced to output the posterior-weighted average of per-state optimal actions; when those disagree, the average is degenerate.</li>
-	<li><b>Even the privileged top-view input does not save you.</b> On Ant-Maze the top-view (MDP) coordinate-VQA recipe collapses harder than the 3rd-person (POMDP) action recipe.</li>
-	<li><b>3rd-person rollouts move more</b> and occasionally win opportunistically — exploration is sometimes enough to find the goal in spite of mean collapse.</li>
+	<li><b>Even the privileged top-view input does not save you.</b> On Ant-Maze, the top-view (MDP) coordinate-VQA recipe collapses harder than the 3rd-person (POMDP) action recipe.</li>
+	<li><b>The cause is one level above pixels — ViT-level feature aliasing.</b> When the scene-relevant content covers only a few pixels (top-view), patch tokens are nearly constant across timesteps; the LLM sees almost the same input every step, and the mean-collapse identity drives the output toward zero. Higher-resolution top-view input fixes it.</li>
+	<li><b>3rd-person rollouts are POMDP but feature-rich</b> — the patches are filled with scene content, so the agent moves more and occasionally wins by exploration.</li>
 	<li><b>A small memory-based steering module on the frozen VLA</b> (GLA Linear-SSM + Perceiver, identity-init gated injection) is the lightweight fix that <b>raises the success rate</b>.</li>
 	<li><b>The same pathology shows up beyond robotics</b> — a frozen GUI agent on a Duolingo quiz loops for the same reason.</li>
 </ul>
@@ -433,7 +511,7 @@ const body = String.raw`
 <Layout
 	title='Mean Collapse is a Serious Bottleneck of VLA'
 	pageTitle='Mean Collapse in VLA'
-	description='On a small Ant-Maze setup, both the top-view (MDP coordinate-VQA) and 3rd-person (POMDP direct-action) variants of a VLM-based VLA mean-collapse — and the top-view collapse is more severe. A small memory-based steering module on the frozen VLA recovers the lost performance.'
+	description='On a small Ant-Maze setup, both the top-view (MDP coordinate-VQA) and 3rd-person (POMDP direct-action) variants of a VLM-based VLA mean-collapse — and the top-view collapse is more severe due to ViT-level feature aliasing. A small memory-based steering module on the frozen VLA recovers the lost performance.'
 	authors={authors}
 	links={links}
 	hero={fig('ant_hero.png')}
