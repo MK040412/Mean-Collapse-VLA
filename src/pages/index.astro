@@ -36,8 +36,10 @@ const body = String.raw`
 	<p>
 		A small <b>memory-based steering module</b> (GLA Linear-SSM + Perceiver) on
 		the <b>frozen</b> 3rd-person VLA lifts success from <b>0.16 → 0.84</b> —
-		past the top-view MDP baseline. The same Markovian-on-$o_t$ failure shows up
-		on a GUI agent (<a href="https://github.com/stepfun-ai/gelab-zero">GELab-Zero</a>)
+		close to the <b>0.91</b> we get with both cameras + VQA, even though
+		steering uses only the 3rd-person input that would be available in the real
+		world. The same Markovian-on-$o_t$ failure shows up on a GUI agent
+		(<a href="https://github.com/stepfun-ai/gelab-zero">GELab-Zero</a>)
 		looping <span class="text-tt">C → D → E → C → D → E → …</span> on a Duolingo
 		quiz.
 	</p>
@@ -364,14 +366,49 @@ const body = String.raw`
 				<td>Direct action + steering module</td>
 				<td><b>0.84</b></td>
 			</tr>
+			<tr>
+				<td>Top-view + 3rd-person, with VQA</td>
+				<td>Both cameras</td>
+				<td>Coordinate-VQA waypoints</td>
+				<td><b>0.91</b></td>
+			</tr>
 		</tbody>
 	</table>
 	<span class="caption-muted">
 		Bare top-view direct-action collapses to 0%; the coordinate-VQA reformulation
 		rescues it. The steering module on the frozen 3rd-person VLA pushes success
-		past the top-view MDP baseline.
+		past the top-view MDP baseline. Feeding both cameras together with VQA gives
+		the best number (0.91).
 	</span>
 </div>
+
+<h2>7.4 Reading the table</h2>
+
+<p>
+	The top number — <b>0.91</b> with both cameras + VQA — is what we got when the
+	top-view (MDP layout) is paired with the 3rd-person view (scene-rich, high-res
+	ViT-friendly content). Our reading: top-view supplies the MDP state, and
+	3rd-person supplies the kind of high-resolution patch features the ViT needs to
+	avoid feature aliasing — the two views compensate for each other's failure
+	modes.
+</p>
+
+<p>
+	The <b>surprising part</b> is how close the 3rd-person <b>+ steering module</b>
+	number (<b>0.84</b>) gets to the privileged-top-view <b>0.91</b>. This matters
+	because in the real world a top-view is almost never available; steering on the
+	frozen 3rd-person VLA is the <b>practically meaningful</b> intervention, and
+	the fact that the gap to a setup with the bird's-eye state is so small is the
+	encouraging signal.
+</p>
+
+<p>
+	On <b>where the remaining failures come from:</b> most of them are not
+	mean-collapse anymore. They are <b>locomotion failures</b> — the ant moves
+	quickly mid-trajectory and tips over, after which the simulation marks the
+	episode as failed. The mean-collapse pathology has largely been removed; what
+	is left is a controller/dynamics issue rather than the VLA itself.
+</p>
 
 <hr />
 <h1>8. Bonus — Same Pathology on a GUI Agent</h1>
@@ -415,7 +452,7 @@ const body = String.raw`
 <ul>
 	<li><b>Mean collapse is the bottleneck for VLM-based VLAs on the latest observation.</b> The optimal Markovian policy is the posterior-weighted average of per-state optima — degenerate when those disagree.</li>
 	<li><b>The privileged top-view does not save you.</b> Bare top-view + direct-action collapses to 0%; the cause is <b>ViT-level feature aliasing</b>, fixed by higher-resolution input or by reformulating the task as coordinate VQA (0.53).</li>
-	<li><b>A small memory-based steering module on the frozen VLA</b> raises 3rd-person success from 0.16 → 0.84, past the top-view MDP baseline.</li>
+	<li><b>A small memory-based steering module on the frozen 3rd-person VLA</b> raises success from 0.16 → 0.84 — close to the 0.91 we get with both cameras + VQA, even though the top-view is unavailable in the real world. Most remaining failures are <b>locomotion-level</b> falls, not mean collapse.</li>
 	<li><b>Same pathology beyond robotics</b> — a frozen GUI agent loops <span class="text-tt">C → D → E → …</span> on a Duolingo quiz for the same reason.</li>
 </ul>
 
