@@ -153,6 +153,15 @@ const body = String.raw`
 	</span>
 </div>
 
+<div class="figure">
+	<img src="${fig('qwen3vl_arch.png')}" alt="Qwen3-VL 2B backbone architecture" />
+	<span class="caption">
+		Qwen3-VL 2B backbone — vision encoder (ViT) feeding into the LLM decoder.
+		LoRA adapters sit on the ViT and the LLM head; everything else stays frozen
+		at the OpenVLA-OFT level. (Diagram reused from the DASH report.)
+	</span>
+</div>
+
 <hr />
 <h1>5. Both Views Mean-Collapse — Bare Top-View Collapses to 0%</h1>
 
