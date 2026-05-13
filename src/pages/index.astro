@@ -258,10 +258,18 @@ const body = String.raw`
 
 <p>
 	If feature aliasing is really the cause, more pixels per scene should sharpen
-	the features and reduce collapse. Confirmed: feeding
+	the features and reduce collapse. We confirmed this directly: feeding
 	<b>higher-resolution top-view images</b> into the ViT (same backbone, same head,
-	same prompt) recovers performance. <i>When a VLM-based VLA mean-collapses on a
-	supposedly-MDP input, suspect resolution / feature aliasing first.</i>
+	same prompt) recovers performance. This is exactly the <b>"Top-view, with VQA"</b>
+	row in the results table (Section 7.3): <b>0.53</b> — produced with the
+	higher-resolution input. With the default input resolution the same coordinate-VQA
+	setup also degrades; the high-res variant is the one that lands at the
+	presentation number.
+</p>
+
+<p>
+	<i>When a VLM-based VLA mean-collapses on a supposedly-MDP input, suspect
+	resolution / feature aliasing first.</i>
 </p>
 
 <hr />
@@ -358,7 +366,7 @@ const body = String.raw`
 				<td><b>0.00</b></td>
 			</tr>
 			<tr>
-				<td>Top-view, with VQA</td>
+				<td>Top-view, with VQA (high-res ViT input)</td>
 				<td>Top-view (MDP)</td>
 				<td>Coordinate-VQA waypoints</td>
 				<td><b>0.53</b></td>
