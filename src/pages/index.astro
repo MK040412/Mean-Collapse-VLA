@@ -45,8 +45,7 @@ const body = String.raw`
 	</p>
 </div>
 
-<hr />
-<h1>1. MDP vs. POMDP — and Why Mean Collapse Happens</h1>
+<h1><span class="sec-num">1</span>MDP vs. POMDP — and Why Mean Collapse Happens</h1>
 
 <p>
 	An MDP gives the agent the state directly: $\pi^{\star}_{\mathrm{MDP}}(a_t \mid s_t)$.
@@ -82,8 +81,7 @@ const body = String.raw`
 	privileged top-view input (Section 6).
 </p>
 
-<hr />
-<h1>2. Most VLA Benchmarks Hide the POMDP</h1>
+<h1><span class="sec-num">2</span>Most VLA Benchmarks Hide the POMDP</h1>
 
 <p>
 	<span class="text-tt">LIBERO</span>, <span class="text-tt">SIMPLER</span>,
@@ -94,8 +92,7 @@ const body = String.raw`
 	the current screen.
 </p>
 
-<hr />
-<h1>3. A Controllable POMDP in OGBench Ant-Maze</h1>
+<h1><span class="sec-num">3</span>A Controllable POMDP in OGBench Ant-Maze</h1>
 
 <p>
 	We re-render OGBench Ant-Maze in MuJoCo with two cameras — the only thing that
@@ -114,8 +111,7 @@ const body = String.raw`
 	</span>
 </div>
 
-<hr />
-<h1>4. Setup</h1>
+<h1><span class="sec-num">4</span>Setup</h1>
 
 <h2>4.1 Data</h2>
 <ul>
@@ -162,8 +158,7 @@ const body = String.raw`
 	</span>
 </div>
 
-<hr />
-<h1>5. Both Views Mean-Collapse — Bare Top-View Collapses to 0%</h1>
+<h1><span class="sec-num">5</span>Both Views Mean-Collapse — Bare Top-View Collapses to 0%</h1>
 
 <p>
 	The bare top-view + direct-action setting collapses to <b>0%</b>: the ant tips,
@@ -216,8 +211,7 @@ const body = String.raw`
 	</div>
 </div>
 
-<hr />
-<h1>6. Why the Top-View Collapse is Worse — ViT-Level Feature Aliasing</h1>
+<h1><span class="sec-num">6</span>Why the Top-View Collapse is Worse — ViT-Level Feature Aliasing</h1>
 
 <p>
 	Classical mean collapse (Section 1.1) is about state aliasing
@@ -272,8 +266,7 @@ const body = String.raw`
 	resolution / feature aliasing first.</i>
 </p>
 
-<hr />
-<h1>7. The Fix — A Memory-Based Steering Module on the Frozen VLA</h1>
+<h1><span class="sec-num">7</span>The Fix — A Memory-Based Steering Module on the Frozen VLA</h1>
 
 <div class="figure">
 	<img src="${fig('steering_module.png')}" alt="Steering module added to the frozen VLA" />
@@ -427,8 +420,7 @@ const body = String.raw`
 	is left is a controller/dynamics issue rather than the VLA itself.
 </p>
 
-<hr />
-<h1>8. Bonus — Same Pathology on a GUI Agent</h1>
+<h1><span class="sec-num">8</span>Bonus — Same Pathology on a GUI Agent</h1>
 
 <p>
 	The same Markovian-on-$o_t$ failure shows up on a real GUI agent.
@@ -463,8 +455,7 @@ const body = String.raw`
 	</span>
 </div>
 
-<hr />
-<h1>9. Takeaway</h1>
+<h1><span class="sec-num">9</span>Takeaway</h1>
 
 <ul>
 	<li><b>Mean collapse is the bottleneck for VLM-based VLAs on the latest observation.</b> The optimal Markovian policy is the posterior-weighted average of per-state optima — degenerate when those disagree.</li>
@@ -473,7 +464,6 @@ const body = String.raw`
 	<li><b>Same pathology beyond robotics</b> — a frozen GUI agent loops <span class="text-tt">C → D → E → …</span> on a Duolingo quiz for the same reason.</li>
 </ul>
 
-<hr />
 <h1>References</h1>
 <ul>
 	<li>Qwen3-VL — <a href="https://arxiv.org/abs/2511.21631">arxiv.org/abs/2511.21631</a></li>
