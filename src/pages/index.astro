@@ -20,8 +20,8 @@ const body = String.raw`
 <div class="tldr-box">
 	<h2>TL;DR</h2>
 	<p>
-		On <span class="text-tt">OGBench Ant-Maze</span> we train a VLM-based VLA
-		(Qwen3-VL 2B + LoRA, OpenVLA-OFT style) under two cameras and two heads:
+		On <span class="text-tt">OGBench AntMaze-medium</span> we train a VLM-based VLA
+		(Qwen3-VL 2B) under two cameras and two heads:
 		<b>top-view (MDP) coordinate-VQA</b> and <b>3rd-person (POMDP) direct
 		action</b>. Both <b>mean-collapse</b>, but the bare top-view collapses to
 		<b>0%</b>: the ant tips over, twitches, freezes.
@@ -46,6 +46,12 @@ const body = String.raw`
 </div>
 
 <h1>1. MDP vs. POMDP<span class="sec-sub">Why Mean Collapse Happens</span></h1>
+
+<p class="lead">
+	A policy that reacts only to the current observation is optimal in an MDP but
+	suboptimal in a POMDP, where the best it can do is a posterior-weighted average
+	of conflicting actions. That average is mean collapse.
+</p>
 
 <p>
 	An MDP gives the agent the state directly: $\pi^{\star}_{\mathrm{MDP}}(a_t \mid s_t)$.
@@ -83,6 +89,11 @@ const body = String.raw`
 
 <h1>2. Most VLA Benchmarks Hide the POMDP</h1>
 
+<p class="lead">
+	Popular VLA benchmarks are effectively MDPs, so they never stress the POMDP
+	regime where mean collapse appears.
+</p>
+
 <p>
 	<span class="text-tt">LIBERO</span>, <span class="text-tt">SIMPLER</span>,
 	<span class="text-tt">UI-TARS</span> all assume $\pi(a_t \mid o_t)$ suffices:
@@ -95,8 +106,8 @@ const body = String.raw`
 <h1>3. A Controllable POMDP in OGBench Ant-Maze</h1>
 
 <p>
-	We re-render OGBench Ant-Maze in MuJoCo with two cameras. The only thing that
-	differs across our settings is observability:
+	We re-render OGBench Ant-Maze in MuJoCo with two cameras. <b>The only thing that
+	differs across our settings is observability:</b>
 </p>
 
 <ul>
@@ -113,21 +124,42 @@ const body = String.raw`
 
 <h1>4. Setup</h1>
 
+<p class="lead">
+	One Qwen3-VL 2B backbone, two camera/head settings, and about $985{,}000$
+	goal-conditioned samples from AntMaze-medium.
+</p>
+
 <h2>4.1 Data</h2>
 <ul>
-	<li>OGBench <code>antmaze-{medium,large,giant}-navigate-v0</code> re-rendered through MuJoCo.</li>
-	<li>$3$ mazes $\times$ $1{,}000$ episodes $\times \sim 1{,}001$ steps, $224 \times 224 \times 3$, two cameras.</li>
+	<li>OGBench <code>antmaze-medium-navigate-v0</code> re-rendered through MuJoCo.</li>
+	<li>$1{,}000$ episodes $\times \sim 1{,}001$ steps, $224 \times 224 \times 3$, two cameras.</li>
 	<li>$8$-DOF torque, <span class="text-tt">qpos</span> $15$-D, <span class="text-tt">qvel</span> $14$-D.</li>
 	<li>Hindsight relabeling: chunk $K = 16$, terminal-goal fraction $0.25$.</li>
 </ul>
 
+<p>
+	<b>How we build the training set.</b> At every start step of an episode we form
+	one sample: the current image plus a goal <span class="text-tt">Go to (x, y)</span>
+	as input, and the next $16$-step action chunk (<span class="text-tt">Δqpos</span>)
+	as the target. The goal is set by hindsight relabeling: with probability $0.25$
+	it is the episode's terminal goal, otherwise it is a randomly sampled future
+	state on the same trajectory. Sliding the start step across each $\sim 1{,}001$-step
+	episode gives $\sim 985$ samples per episode, so $1{,}000$ episodes become
+	$\approx 985{,}000$ (image, goal, action-chunk) examples.
+</p>
+
+<p class="data-note">
+	Note: the dataset is large because two factors compound: the $16$-step action
+	chunk slides over every start step, and each step draws its own random subgoal.
+	One trajectory thus expands into hundreds of (observation, goal, action) pairs.
+</p>
+
 <h2>4.2 Two heads, one backbone</h2>
 
 <p>
-	Both settings share <a href="https://arxiv.org/abs/2511.21631">Qwen3-VL 2B</a>
-	with LoRA on ViT and the LLM head, trained
-	<a href="https://openvla-oft.github.io/">OpenVLA-OFT</a>-style. They differ
-	only in observability and the output head:
+	Both settings start from the same <a href="https://arxiv.org/abs/2511.21631">Qwen3-VL 2B</a>
+	backbone. They differ in observability, in the output head, and in how the
+	backbone is trained:
 </p>
 
 <ul>
@@ -138,7 +170,8 @@ const body = String.raw`
 	</li>
 	<li>
 		<b>3rd-person (POMDP), direct action.</b> Image + same instruction
-		$\rightarrow$ a parallel-decoded action chunk in joint-torque space.
+		$\rightarrow$ a parallel-decoded $16$-step action chunk of joint-position
+		deltas (<span class="text-tt">Δqpos</span>).
 	</li>
 </ul>
 
@@ -149,16 +182,38 @@ const body = String.raw`
 	</span>
 </div>
 
-<div class="figure">
+<p>
+	<b>The baseline backbone.</b> Qwen3-VL 2B is a vision-language model: a ViT
+	vision encoder turns the image into patch tokens that feed an LLM decoder. On
+	its own it is a chat / VQA model, not a controller.
+</p>
+
+<p>
+	<b>Two training regimes.</b> The two heads are trained differently. For the
+	top-view coordinate-VQA head we <b>fully fine-tune</b> the backbone, since the
+	model only has to emit waypoint coordinates as text. For the 3rd-person
+	direct-action head we follow <a href="https://openvla-oft.github.io/">OpenVLA-OFT</a>:
+	a continuous action chunk decoded in parallel, learned by <b>LoRA fine-tuning</b>
+	on the otherwise-frozen backbone.
+</p>
+
+<div class="figure fig-sm">
 	<img src="${fig('qwen3vl_arch.png')}" alt="Qwen3-VL 2B backbone architecture" />
 	<span class="caption">
-		Qwen3-VL 2B backbone: a vision encoder (ViT) feeding into the LLM decoder.
-		LoRA adapters sit on the ViT and the LLM head; everything else stays frozen
-		at the OpenVLA-OFT level.
+		Baseline backbone (Qwen3-VL 2B): a ViT vision encoder feeding the LLM
+		decoder. The coordinate-VQA head is trained by full fine-tuning; the
+		direct-action head is trained OpenVLA-OFT-style with LoRA.
 	</span>
 </div>
 
 <h1>5. Both Views Mean-Collapse<span class="sec-sub">Bare Top-View Collapses to 0%</span></h1>
+
+<p class="results-glance">
+	<b>Results at a glance (success rate):</b>
+	bare top-view <b>0.00</b> → with VQA <b>0.53</b> &nbsp;·&nbsp;
+	3rd-person <b>0.16</b> → with steering <b>0.84</b> &nbsp;·&nbsp;
+	both cameras + VQA <b>0.91</b>
+</p>
 
 <p>
 	The bare top-view + direct-action setting collapses to <b>0%</b>: the ant tips,
@@ -267,6 +322,11 @@ const body = String.raw`
 </p>
 
 <h1>7. The Fix<span class="sec-sub">A Memory-Based Steering Module on the Frozen VLA</span></h1>
+
+<p class="lead">
+	A small memory module bolted onto the frozen 3rd-person VLA fixes mean collapse,
+	lifting success from $0.16$ to $0.84$ without re-training the base model.
+</p>
 
 <div class="figure">
 	<img src="${fig('steering_module.png')}" alt="Steering module added to the frozen VLA" />

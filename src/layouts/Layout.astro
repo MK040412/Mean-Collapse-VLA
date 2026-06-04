@@ -334,16 +334,43 @@ const {
 		color: var(--muted);
 	}
 
-	.block-statement {
-		display: table;
+	.data-note {
+		color: var(--muted);
+		font-size: 15px;
+		font-style: italic;
+		line-height: 1.55;
+		margin: 6px 0 18px;
+		padding-left: 12px;
+		border-left: 2px solid var(--border);
+	}
+
+	.lead {
 		font-weight: 600;
-		border: 2px solid var(--block-border);
-		background: var(--block-bg);
-		border-radius: 10px;
-		padding: 14px 18px;
-		margin: 22px auto;
-		max-width: 900px;
-		font-size: 19px;
+		font-size: 1.04em;
+		line-height: 1.5;
+		margin: 0 0 16px;
+	}
+
+	.results-glance {
+		text-align: center;
+		color: var(--muted);
+		font-size: 16px;
+		line-height: 1.8;
+		margin: 4px auto 24px;
+		max-width: 760px;
+	}
+
+	.results-glance b {
+		color: var(--fg);
+	}
+
+	.block-statement {
+		margin: 30px auto;
+		max-width: 760px;
+		text-align: center;
+		color: var(--block-border);
+		font-weight: 600;
+		font-size: 20px;
 		line-height: 1.5;
 	}
 
@@ -363,6 +390,10 @@ const {
 	.figure {
 		margin: 28px auto;
 		max-width: 1000px;
+	}
+
+	.figure.fig-sm {
+		max-width: 640px;
 	}
 
 	.figure img,
